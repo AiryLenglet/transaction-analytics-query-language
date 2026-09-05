@@ -37,6 +37,34 @@ list { <projections> } [over { <filters> }] [sort by <k> [desc], ...] [top N]
 Same expression and filter language, no grouping. `sort by` may name an output
 alias or any catalog field.
 
+### Window functions
+
+Computed over the grouped result, so they read the query's own outputs by name
+rather than base columns:
+
+```
+analysis by Country, CounterpartyName {
+    total = sum(TransactionValue)
+    pct   = share(total) within Country
+    rk    = rank(total) within Country
+    prev  = lag(total) within Country ordered by y
+}
+top 2 by total within Country
+```
+
+- `share(m)` — `m` as a fraction of the partition total. Guarded with `NULLIF`,
+  so a zero denominator yields NULL rather than SQL Server error 8134.
+- `rank(m)` — position within the partition, 1 = largest. Orders by its own
+  argument descending unless `ordered by` says otherwise.
+- `lag(m)` / `lead(m)` — the neighbouring row's value. `ordered by` is required;
+  there is no sensible default for "which row comes before".
+- `within k, ...` is `PARTITION BY`; omitted means the whole result.
+- `top N by m within k` caps rows *per group* rather than globally, so it becomes
+  a `ROW_NUMBER` predicate instead of a `TOP` clause.
+
+A window function reads a group key or an aggregate, never another window
+function — chaining would need the measures ordered by dependency.
+
 ### Shared
 
 - Filters on separate lines are implicitly `AND`ed; `and`, `or`, `not` and
@@ -125,6 +153,24 @@ Server's own stable. Inline lists keep `IN (?, ?)` since their arity is part of
 the shape. (`OPENJSON` needs database compatibility level 130+, i.e. SQL Server
 2016 or later; the 2019 image in `runMsSqlServer.sh` defaults to 150.)
 
+**Window functions stack levels rather than fight T-SQL.** A window function
+cannot see the aggregate it reads in the same `SELECT`, and `ROW_NUMBER` cannot
+be filtered where it is defined — SQL Server rejects both. So the grouped query
+becomes a subquery, the window level computes over its columns, and a per-group
+`top ... within` adds one more level for the rank predicate:
+
+```sql
+SELECT w.[Country], w.[CounterpartyName], w.[total]
+FROM ( SELECT g.[Country], g.[CounterpartyName], g.[total],
+              ROW_NUMBER() OVER (PARTITION BY g.[Country] ORDER BY g.[total] DESC) AS [__rank]
+       FROM ( SELECT ... SUM(...) AS [total] FROM ... GROUP BY ... ) AS g ) AS w
+WHERE w.[__rank] <= ?
+ORDER BY [Country] ASC, [total] DESC
+```
+
+A parameterised group key adds its own derived table underneath, giving three
+levels; that combination is covered by a test.
+
 **Computed group keys go through a derived table.** A key has to appear in both
 SELECT and GROUP BY, and T-SQL matches those occurrences syntactically -- so once
 the key's constants are parameterised the two copies bind different parameters
@@ -203,7 +249,11 @@ the database does not have. That is a deployment fault, not a caller fault — a
 Deliberate omissions for a POC, roughly in the order I would add them:
 
 - **Pagination.** `TOP` only; no `OFFSET/FETCH` and no keyset cursor.
-- **`having`.** Filtering on a measure after aggregation has no syntax yet.
+- **`having`.** Filtering on a measure after aggregation has no syntax yet
+  (`top ... within` is the only post-aggregate filter).
+- **Window functions in flat queries.** They are analysis-only: their arguments
+  are measure and group-key names, so `rank` over ungrouped rows needs its own
+  design for what to order by.
 - **Authorisation.** The catalog decides which fields exist, but not which
   fields *this caller* may read. Row-level filters (e.g. force `ClientId` to the
   caller's own) belong as a mandatory predicate injected at lowering.

@@ -32,7 +32,7 @@ fromClause     : FROM identifier ;
 overClause     : OVER LBRACE (predicate (COMMA? predicate)*)? RBRACE ;
 sortClause     : SORT BY sortItem (COMMA? sortItem)* ;
 sortItem       : expression (ASC | DESC)? ;
-topClause      : TOP countExpr (BY identifier)? ;
+topClause      : TOP countExpr (BY identifier)? withinClause? ;
 countExpr      : INT | PARAM ;
 
 // ---------- analysis ----------
@@ -41,8 +41,15 @@ groupKeyList   : groupKey (COMMA? groupKey)* ;
 groupKey       : (identifier EQ)? expression ;
 
 measureBlock   : LBRACE measure (COMMA? measure)* RBRACE ;
-measure        : (identifier EQ)? aggregate (WHEN predicate)? ;
+
+// Aggregates and window functions share this shape; which one a measure is
+// depends on the function name, and the resolver decides. Splitting them in the
+// grammar would make 'rank(total)' a parse error rather than a named one.
+measure        : (identifier EQ)? aggregate (WHEN predicate)? withinClause? orderedClause? ;
 aggregate      : identifier LPAREN (DISTINCT? expression)? RPAREN ;
+
+withinClause   : WITHIN identifier (COMMA identifier)* ;
+orderedClause  : ORDERED BY identifier (ASC | DESC)? ;
 
 // ---------- flat ----------
 
@@ -114,6 +121,8 @@ BY        : B Y ;
 FROM      : F R O M ;
 OVER      : O V E R ;
 SORT      : S O R T ;
+WITHIN    : W I T H I N ;
+ORDERED   : O R D E R E D ;
 TOP       : T O P ;
 ASC       : A S C ;
 DESC      : D E S C ;

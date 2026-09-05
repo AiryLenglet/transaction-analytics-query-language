@@ -79,3 +79,25 @@ over {
     transactionId not like 'X%'
 }
 sort by transactionId
+-----------------
+// Window functions: share of total and rank, computed over the grouped result.
+analysis by Country {
+    total = sum(TransactionValue)
+    pct   = share(total)
+    rk    = rank(total)
+}
+-----------------
+// Top N per group. 'within' turns the global TOP into a per-group rank filter,
+// so this is the two biggest counterparties in each country.
+analysis by Country, CounterpartyName {
+    total = sum(TransactionValue)
+}
+top 2 by total within Country
+-----------------
+// Period-over-period: lag() needs an explicit ordering to know which row
+// comes before, and resets at each partition boundary.
+analysis by Country, y = year(TransactionDate) {
+    total = sum(TransactionValue)
+    prev  = lag(total) within Country ordered by y
+    growth = share(total) within Country
+}

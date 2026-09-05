@@ -55,7 +55,8 @@ public final class AstBuilder {
             Ast.Expr argument = agg.expression() != null ? expr(agg.expression()) : null;
             String alias = m.identifier() != null ? name(m.identifier()) : impliedMeasureAlias(function, argument, agg);
             Ast.Pred filter = m.predicate() != null ? pred(m.predicate()) : null;
-            measures.add(new Ast.Measure(alias, function, agg.DISTINCT() != null, argument, filter, pos(m)));
+            measures.add(new Ast.Measure(alias, function, agg.DISTINCT() != null, argument, filter,
+                    within(m.withinClause()), ordering(m.orderedClause()), pos(m)));
         }
 
         return new Ast.Analysis(clauses.entity, groups, measures, clauses.filter, clauses.top, pos(ctx));
@@ -105,7 +106,8 @@ public final class AstBuilder {
                 Ast.Expr count = t.countExpr().PARAM() != null
                         ? new Ast.Param(paramName(t.countExpr().PARAM()), pos(t))
                         : lit(Long.parseLong(t.countExpr().INT().getText()), Ast.LitKind.INTEGER, pos(t));
-                out.top = new Ast.Top(count, t.identifier() != null ? name(t.identifier()) : null, pos(t));
+                out.top = new Ast.Top(count, t.identifier() != null ? name(t.identifier()) : null,
+                        within(t.withinClause()), pos(t));
             } else if (c.sortClause() != null) {
                 if (!sortAllowed) throw error(c, "'sort by' is not valid on an analysis query; use 'top N by <measure>'");
                 if (!out.sort.isEmpty()) throw error(c, "duplicate 'sort by' clause");
@@ -280,6 +282,18 @@ public final class AstBuilder {
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    private static List<String> within(TaqlParser.WithinClauseContext ctx) {
+        if (ctx == null) return List.of();
+        List<String> keys = new ArrayList<>();
+        for (TaqlParser.IdentifierContext i : ctx.identifier()) keys.add(name(i));
+        return keys;
+    }
+
+    private static Ast.Ordering ordering(TaqlParser.OrderedClauseContext ctx) {
+        if (ctx == null) return null;
+        return new Ast.Ordering(name(ctx.identifier()), ctx.DESC() != null, pos(ctx));
+    }
 
     private static String name(TaqlParser.IdentifierContext ctx) {
         String text = ctx.getText();

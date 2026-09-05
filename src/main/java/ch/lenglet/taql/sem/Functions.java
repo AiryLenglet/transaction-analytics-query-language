@@ -37,6 +37,35 @@ public final class Functions {
             "min",   new Aggregate("min",   true,  t -> t,                false),
             "max",   new Aggregate("max",   true,  t -> t,                false));
 
+    /**
+     * A window function: computed over the grouped result rather than over rows.
+     *
+     * @param needsOrder      an explicit {@code ordered by} is required
+     * @param ordersByItsArgument  with no {@code ordered by}, the argument is the
+     *                             ordering key (descending) -- so {@code rank(total)}
+     *                             means what you would expect
+     * @param allowsOrder     an {@code ordered by} is meaningful at all
+     */
+    public record Window(String name, Function<TaqlType, TaqlType> resultType,
+                         boolean needsOrder, boolean ordersByItsArgument, boolean allowsOrder) {}
+
+    private static final Map<String, Window> WINDOWS = Map.of(
+            // rank(m): position within the partition, 1 = largest.
+            "rank", new Window("rank", t -> TaqlType.INTEGER, false, true, true),
+            // share(m): m as a fraction of the partition's total.
+            "share", new Window("share", t -> TaqlType.DECIMAL, false, false, false),
+            // lag(m)/lead(m): the neighbouring row's value along an explicit order.
+            "lag", new Window("lag", t -> t, true, false, true),
+            "lead", new Window("lead", t -> t, true, false, true));
+
+    public static Optional<Window> window(String name) {
+        return Optional.ofNullable(WINDOWS.get(name.toLowerCase(Locale.ROOT)));
+    }
+
+    public static List<String> windowNames() {
+        return WINDOWS.keySet().stream().sorted().toList();
+    }
+
     public static Optional<Scalar> scalar(String name) {
         return Optional.ofNullable(SCALARS.get(name.toLowerCase(Locale.ROOT)));
     }

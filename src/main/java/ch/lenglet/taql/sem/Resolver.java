@@ -90,38 +90,67 @@ public final class Resolver {
     private Tam.Query analysis(Ast.Analysis a) {
         List<Tam.Output> groups = new ArrayList<>();
         Set<String> aliases = new LinkedHashSet<>();
+        Map<String, TaqlType> groupTypes = new LinkedHashMap<>();
         for (Ast.GroupKey g : a.groups()) {
             Tam.Expr expr = expr(g.expr(), false);
             rejectDuplicateAlias(aliases, g.alias(), g.pos());
+            groupTypes.put(g.alias(), expr.type());
             groups.add(new Tam.Output(g.alias(), expr));
         }
 
+        // Pass 1: aggregates. Their aliases are the vocabulary window functions
+        // read from, so they all have to exist before pass 2 runs -- which also
+        // means a window function may reference a measure declared below it.
         List<Tam.Output> measures = new ArrayList<>();
-        Map<String, TaqlType> measureTypes = new LinkedHashMap<>();
+        Map<String, TaqlType> outputTypes = new LinkedHashMap<>();
+        for (Ast.GroupKey g : a.groups()) outputTypes.put(g.alias(), groupTypes.get(g.alias()));
+
+        List<Ast.Measure> windowMeasures = new ArrayList<>();
         for (Ast.Measure m : a.measures()) {
             rejectDuplicateAlias(aliases, m.alias(), m.pos());
+            if (Functions.window(m.function()).isPresent()) {
+                windowMeasures.add(m);
+                continue;
+            }
             Tam.Aggregate agg = aggregate(m);
-            measureTypes.put(m.alias(), agg.type());
+            outputTypes.put(m.alias(), agg.type());
             measures.add(new Tam.Output(m.alias(), agg));
+        }
+
+        // Pass 2: window functions over those aliases.
+        List<Tam.Output> windows = new ArrayList<>();
+        Set<String> windowAliases = new LinkedHashSet<>();
+        for (Ast.Measure m : windowMeasures) windowAliases.add(m.alias());
+        for (Ast.Measure m : windowMeasures) {
+            windows.add(new Tam.Output(m.alias(), window(m, outputTypes, windowAliases)));
         }
 
         Tam.Pred filter = a.filter() == null ? null : pred(a.filter());
 
         // 'top N by <measure>' is an ordering over an output alias, not a field.
-        List<Tam.Sort> sort = List.of();
+        List<Tam.Sort> sort = new ArrayList<>();
+        Tam.RankFilter rankFilter = null;
         if (a.top() != null && a.top().byMeasure() != null) {
-            String alias = a.top().byMeasure();
-            TaqlType type = measureTypes.get(alias);
-            if (type == null) {
-                error(a.top().pos(), Diagnostic.Phase.RESOLUTION,
-                        "'top ... by " + alias + "' must name one of the measures: " + measureTypes.keySet());
-                type = TaqlType.DECIMAL;
+            Tam.OutputRef ranked = outputRef(a.top().byMeasure(), outputTypes, a.top().pos(),
+                    "'top ... by " + a.top().byMeasure() + "'");
+            if (a.top().within().isEmpty()) {
+                sort.add(new Tam.Sort(ranked, true));
+            } else {
+                // 'within' turns the global TOP into N rows per group, so the row
+                // cap becomes a ROW_NUMBER predicate instead of a TOP clause.
+                List<Tam.OutputRef> partition = partition(a.top().within(), outputTypes, a.top().pos());
+                rankFilter = new Tam.RankFilter(partition, ranked, true, limit(a.top()));
+                for (Tam.OutputRef key : partition) sort.add(new Tam.Sort(key, false));
+                sort.add(new Tam.Sort(ranked, true));
             }
-            sort = List.of(new Tam.Sort(new Tam.OutputRef(alias, type), true));
+        } else if (a.top() != null && !a.top().within().isEmpty()) {
+            error(a.top().pos(), Diagnostic.Phase.RESOLUTION,
+                    "'top N within ...' also needs 'by <measure>' to say what to rank on");
         }
 
         return new Tam.Query(Tam.Kind.ANALYSIS, entity, Set.copyOf(requiredJoins),
-                groups, measures, List.of(), filter, sort, limit(a.top()));
+                groups, measures, windows, List.of(), filter, sort,
+                rankFilter == null ? limit(a.top()) : null, rankFilter);
     }
 
     private Tam.Query flat(Ast.Flat f) {
@@ -152,9 +181,13 @@ public final class Resolver {
             error(f.top().pos(), Diagnostic.Phase.RESOLUTION,
                     "'top N by ...' is only valid on an analysis query; use 'sort by ... top N'");
         }
+        if (f.top() != null && !f.top().within().isEmpty()) {
+            error(f.top().pos(), Diagnostic.Phase.RESOLUTION,
+                    "'within' needs grouped measures to rank, so it is only valid on an analysis query");
+        }
 
         return new Tam.Query(Tam.Kind.FLAT, entity, Set.copyOf(requiredJoins),
-                List.of(), List.of(), projections, filter, sort, limit(f.top()));
+                List.of(), List.of(), List.of(), projections, filter, sort, limit(f.top()), null);
     }
 
     /** Null when the query states no 'top' and no cap is configured; the statement then has no TOP. */
@@ -204,6 +237,70 @@ public final class Resolver {
 
         Tam.Pred filter = m.filter() == null ? null : pred(m.filter());
         return new Tam.Aggregate(agg.name(), m.distinct(), argument, filter, agg.resultType().apply(argType));
+    }
+
+    /**
+     * Resolves a window measure. Its argument, partition and ordering are all
+     * references to the query's own outputs -- never to base columns, because a
+     * window function is evaluated after grouping.
+     */
+    private Tam.Window window(Ast.Measure m, Map<String, TaqlType> outputTypes, Set<String> windowAliases) {
+        Functions.Window spec = Functions.window(m.function()).orElseThrow();
+
+        if (m.filter() != null) {
+            error(m.pos(), Diagnostic.Phase.TYPE, m.function() + "() cannot take a 'when' filter");
+        }
+        if (m.distinct()) {
+            error(m.pos(), Diagnostic.Phase.TYPE, m.function() + "() cannot take 'distinct'");
+        }
+        if (!(m.argument() instanceof Ast.FieldRef ref)) {
+            throw fail(m.pos(), Diagnostic.Phase.TYPE,
+                    m.function() + "() takes the name of a group key or measure, e.g. " + m.function() + "(total)");
+        }
+        // Chaining windows would need them ordered by dependency; one level is enough.
+        if (windowAliases.contains(ref.name())) {
+            error(m.pos(), Diagnostic.Phase.TYPE,
+                    "'" + ref.name() + "' is itself a window function; " + m.function()
+                            + "() must read a group key or an aggregate");
+        }
+        Tam.OutputRef argument = outputRef(ref.name(), outputTypes, m.pos(), m.function() + "()");
+
+        List<Tam.OutputRef> partition = partition(m.within(), outputTypes, m.pos());
+
+        Tam.OutputRef order = null;
+        boolean descending = true;
+        if (m.ordered() != null) {
+            if (!spec.allowsOrder()) {
+                error(m.ordered().pos(), Diagnostic.Phase.TYPE,
+                        m.function() + "() has no ordering; drop the 'ordered by'");
+            }
+            order = outputRef(m.ordered().name(), outputTypes, m.ordered().pos(), "'ordered by'");
+            descending = m.ordered().descending();
+        } else if (spec.ordersByItsArgument()) {
+            order = argument;          // rank(total) means rank by total, largest first
+        } else if (spec.needsOrder()) {
+            error(m.pos(), Diagnostic.Phase.TYPE,
+                    m.function() + "() needs an explicit 'ordered by <name>' to know which row comes before");
+        }
+
+        return new Tam.Window(spec.name(), argument, partition, order, descending,
+                spec.resultType().apply(argument.type()));
+    }
+
+    private List<Tam.OutputRef> partition(List<String> names, Map<String, TaqlType> outputTypes, Ast.Pos pos) {
+        List<Tam.OutputRef> refs = new ArrayList<>();
+        for (String name : names) refs.add(outputRef(name, outputTypes, pos, "'within'"));
+        return refs;
+    }
+
+    private Tam.OutputRef outputRef(String name, Map<String, TaqlType> outputTypes, Ast.Pos pos, String what) {
+        TaqlType type = outputTypes.get(name);
+        if (type == null) {
+            error(pos, Diagnostic.Phase.RESOLUTION,
+                    what + " must name a group key or measure of this query: " + outputTypes.keySet());
+            return new Tam.OutputRef(name, TaqlType.DECIMAL);
+        }
+        return new Tam.OutputRef(name, type);
     }
 
     // ------------------------------------------------------------------

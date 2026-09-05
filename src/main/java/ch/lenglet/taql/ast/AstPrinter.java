@@ -30,7 +30,8 @@ final class AstPrinter {
                 for (Ast.Measure m : a.measures()) {
                     measures.add(m.alias() + ":" + m.function() + (m.distinct() ? "!d" : "")
                             + "(" + (m.argument() == null ? "" : expr(m.argument())) + ")"
-                            + (m.filter() == null ? "" : "?" + pred(m.filter())));
+                            + (m.filter() == null ? "" : "?" + pred(m.filter()))
+                            + window(m.within(), m.ordered()));
                 }
                 sb.append(measures);
                 sb.append("|top=").append(top(a.top()));
@@ -55,7 +56,16 @@ final class AstPrinter {
 
     private static String top(Ast.Top top) {
         if (top == null) return "-";
-        return expr(top.count()) + (top.byMeasure() == null ? "" : " by " + top.byMeasure());
+        return expr(top.count()) + (top.byMeasure() == null ? "" : " by " + top.byMeasure())
+                + window(top.within(), null);
+    }
+
+    private static String window(List<String> within, Ast.Ordering ordered) {
+        StringBuilder sb = new StringBuilder();
+        if (within != null && !within.isEmpty()) sb.append(" within ").append(String.join(",", within));
+        if (ordered != null) sb.append(" ordered by ").append(ordered.name())
+                               .append(ordered.descending() ? " desc" : " asc");
+        return sb.toString();
     }
 
     private static String expr(Ast.Expr e) {

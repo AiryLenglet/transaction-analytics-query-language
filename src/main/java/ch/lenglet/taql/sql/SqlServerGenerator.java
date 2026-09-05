@@ -29,6 +29,9 @@ import java.util.Set;
 public final class SqlServerGenerator {
 
     private static final String DERIVED = "g";
+    private static final String WINDOWED = "g";
+    private static final String RANKED = "w";
+    private static final String RANK_COLUMN = "__rank";
     private static final String ROOT = "";
 
     private final StringBuilder sql = new StringBuilder();
@@ -51,6 +54,10 @@ public final class SqlServerGenerator {
 
     private void query(Tam.Query q) {
         tableAliases = allocateAliases(q.entity());
+        if (q.kind() == Tam.Kind.ANALYSIS && q.hasWindowLevel()) {
+            analysisWithWindows(q);
+            return;
+        }
         if (q.kind() == Tam.Kind.ANALYSIS && needsDerivedTable(q)) {
             analysisOverDerivedTable(q);
             return;
@@ -93,6 +100,7 @@ public final class SqlServerGenerator {
                     || (c.otherwise() != null && carriesParameter(c.otherwise()));
             case Tam.Aggregate a -> (a.argument() != null && carriesParameter(a.argument()))
                     || (a.filter() != null && carriesParameter(a.filter()));
+            case Tam.Window ignored -> false;
         };
     }
 
@@ -193,6 +201,7 @@ public final class SqlServerGenerator {
                 collectColumns(b.left(), out);
                 collectColumns(b.right(), out);
             }
+            case Tam.Window ignored -> { }
             case Tam.Func f -> f.args().forEach(a -> collectColumns(a, out));
             case Tam.Case c -> {
                 for (Tam.When w : c.whens()) {
@@ -249,6 +258,140 @@ public final class SqlServerGenerator {
             if (i < outputs.size() - 1) sql.append(",");
             sql.append("\n");
         }
+    }
+
+    /**
+     * A window function cannot see the aggregate it reads in the same SELECT, and
+     * ROW_NUMBER cannot be filtered where it is defined -- SQL Server rejects
+     * both. So the grouped query becomes a subquery, the window level computes
+     * over its columns, and (when 'top N ... within' asked for a per-group cap)
+     * one more level applies the rank predicate.
+     *
+     *   SELECT ... FROM ( SELECT ..., ROW_NUMBER() OVER (...) AS rank
+     *                     FROM ( ...GROUP BY... ) g ) w
+     *   WHERE w.[rank] <= ?
+     */
+    private void analysisWithWindows(Tam.Query q) {
+        boolean ranked = q.rankFilter() != null;
+        String inner = ranked ? RANKED : WINDOWED;
+
+        if (ranked) {
+            selectKeyword(q);
+            List<Tam.Output> outputs = q.outputs();
+            for (int i = 0; i < outputs.size(); i++) {
+                sql.append("       ").append(RANKED).append(".").append(quote(outputs.get(i).alias()))
+                   .append(" AS ").append(quote(outputs.get(i).alias()));
+                if (i < outputs.size() - 1) sql.append(",");
+                sql.append("\n");
+            }
+            sql.append("FROM (\n");
+        }
+
+        // The window level: group keys and measures passed through, windows computed.
+        String body = capture(() -> {
+            if (!ranked) selectKeyword(q);
+            else sql.append("SELECT\n");
+
+            for (Tam.Output o : q.outputs()) {
+                sql.append("       ");
+                if (o.expr() instanceof Tam.Window w) window(w);
+                else sql.append(WINDOWED).append(".").append(quote(o.alias()));
+                sql.append(" AS ").append(quote(o.alias())).append(",\n");
+            }
+            if (ranked) {
+                sql.append("       ");
+                rowNumber(q.rankFilter());
+                sql.append(" AS ").append(quote(RANK_COLUMN)).append(",\n");
+            }
+            sql.setLength(sql.length() - 2);
+            sql.append("\n");
+
+            sql.append("FROM (\n");
+            sql.append(indent(capture(() -> groupedQuery(q))));
+            sql.append(") AS ").append(WINDOWED).append("\n");
+        });
+
+        sql.append(ranked ? indent(body) : body);
+
+        if (ranked) {
+            sql.append(") AS ").append(RANKED).append("\n");
+            sql.append("WHERE ").append(RANKED).append(".").append(quote(RANK_COLUMN)).append(" <= ");
+            value(q.rankFilter().limit());
+            sql.append("\n");
+        }
+        orderByClause(q);
+    }
+
+    /** The grouped query, without TOP or ORDER BY -- those belong to the outermost level. */
+    private void groupedQuery(Tam.Query q) {
+        Tam.Query grouped = new Tam.Query(q.kind(), q.entity(), q.joins(), q.groups(), q.measures(),
+                List.of(), List.of(), q.filter(), List.of(), null, null);
+        if (needsDerivedTable(grouped)) {
+            analysisOverDerivedTable(grouped);
+        } else {
+            selectClause(grouped);
+            fromClause(grouped);
+            whereClause(grouped);
+            groupByClause(grouped);
+        }
+    }
+
+    private void window(Tam.Window w) {
+        switch (w.function()) {
+            // A share of zero would divide by zero (error 8134), so it yields NULL instead.
+            case "share" -> {
+                sql.append(WINDOWED).append(".").append(quote(w.argument().alias()))
+                   .append(" * 1.0 / NULLIF(SUM(").append(WINDOWED).append(".")
+                   .append(quote(w.argument().alias())).append(")");
+                over(w.partition(), null, false);
+                sql.append(", 0)");
+            }
+            case "rank" -> {
+                sql.append("RANK()");
+                over(w.partition(), w.order(), w.descending());
+            }
+            case "lag", "lead" -> {
+                sql.append(w.function().toUpperCase()).append("(")
+                   .append(WINDOWED).append(".").append(quote(w.argument().alias())).append(")");
+                over(w.partition(), w.order(), w.descending());
+            }
+            default -> throw new IllegalStateException("no SQL mapping for window function " + w.function());
+        }
+    }
+
+    private void rowNumber(Tam.RankFilter rank) {
+        sql.append("ROW_NUMBER()");
+        over(rank.partition(), rank.order(), rank.descending());
+    }
+
+    private void over(List<Tam.OutputRef> partition, Tam.OutputRef order, boolean descending) {
+        sql.append(" OVER (");
+        if (!partition.isEmpty()) {
+            sql.append("PARTITION BY ");
+            for (int i = 0; i < partition.size(); i++) {
+                if (i > 0) sql.append(", ");
+                sql.append(WINDOWED).append(".").append(quote(partition.get(i).alias()));
+            }
+        }
+        if (order != null) {
+            if (!partition.isEmpty()) sql.append(" ");
+            sql.append("ORDER BY ").append(WINDOWED).append(".").append(quote(order.alias()))
+               .append(descending ? " DESC" : " ASC");
+        }
+        sql.append(")");
+    }
+
+    /** Runs {@code emit} against a fresh buffer, keeping parameter order intact. */
+    private String capture(Runnable emit) {
+        int mark = sql.length();
+        emit.run();
+        String captured = sql.substring(mark);
+        sql.setLength(mark);
+        return captured;
+    }
+
+    private static String indent(String block) {
+        return "    " + block.stripTrailing().replace("\n", "\n    ") + "\n";
     }
 
     /** TOP appears only when the query asked for one, so the SQL mirrors the TAQL. */
@@ -346,6 +489,7 @@ public final class SqlServerGenerator {
             case Tam.Func f -> func(f);
             case Tam.Case c -> caseExpr(c);
             case Tam.Aggregate a -> aggregate(a);
+            case Tam.Window w -> window(w);
         }
     }
 

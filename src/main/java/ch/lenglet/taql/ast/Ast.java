@@ -99,14 +99,24 @@ public final class Ast {
 
     public record GroupKey(String alias, Expr expr, Pos pos) {}
 
-    public record Measure(String alias, String function, boolean distinct, Expr argument, Pred filter, Pos pos) {}
+    /**
+     * An aggregate or a window function -- which one depends on {@code function},
+     * and the resolver decides. {@code within}/{@code ordered} are only legal on
+     * a window function, {@code filter} only on an aggregate.
+     */
+    public record Measure(String alias, String function, boolean distinct, Expr argument, Pred filter,
+                          List<String> within, Ordering ordered, Pos pos) {}
+
+    /** {@code ordered by <name> [asc|desc]} */
+    public record Ordering(String name, boolean descending, Pos pos) {}
 
     public record Projection(String alias, Expr expr, Pos pos) {}
 
     public record SortItem(Expr expr, boolean descending, Pos pos) {}
 
     /** {@code count} is a {@link Lit} or {@link Param}; {@code byMeasure} names a measure alias. */
-    public record Top(Expr count, String byMeasure, Pos pos) {}
+    /** {@code within} turns a global TOP into a per-group rank filter. */
+    public record Top(Expr count, String byMeasure, List<String> within, Pos pos) {}
 
     public record Analysis(String entity, List<GroupKey> groups, List<Measure> measures,
                            Pred filter, Top top, Pos pos) implements Stmt {}

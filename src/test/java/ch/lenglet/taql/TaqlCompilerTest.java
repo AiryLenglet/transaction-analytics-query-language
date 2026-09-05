@@ -104,7 +104,142 @@ class TaqlCompilerTest {
         void rejectsTopByAnUnknownMeasure() {
             TaqlException e = assertThrows(TaqlException.class, () -> compiler.compileUncached(
                     "analysis by country { total = sum(TransactionValue) } top 10 by nope"));
-            assertTrue(e.getMessage().contains("must name one of the measures"));
+            assertTrue(e.getMessage().contains("must name a group key or measure"));
+        }
+    }
+
+    // ==================================================================
+    @Nested
+    @DisplayName("window functions")
+    class Windows {
+
+        @Test
+        void shareDividesByThePartitionTotalAndGuardsAgainstZero() {
+            // A zero denominator would raise SQL Server error 8134; NULLIF makes
+            // it a NULL result instead of a failed request.
+            Plan plan = compiler.compileUncached(
+                    "analysis by Country { total = sum(TransactionValue)  pct = share(total) }");
+            assertTrue(plan.sql().contains("g.[total] * 1.0 / NULLIF(SUM(g.[total]) OVER (), 0) AS [pct]"),
+                    plan.sql());
+            assertEquals(TaqlType.DECIMAL, plan.columns().getLast().type());
+        }
+
+        @Test
+        void shareWithinAPartitionScopesTheDenominator() {
+            assertTrue(compiler.compileUncached(
+                    "analysis by Country, Currency { total = sum(TransactionValue) "
+                            + " pct = share(total) within Country }")
+                    .sql().contains("OVER (PARTITION BY g.[Country])"));
+        }
+
+        @Test
+        void rankOrdersByItsArgumentDescendingSoRankOneIsTheLargest() {
+            Plan plan = compiler.compileUncached(
+                    "analysis by Country { total = sum(TransactionValue)  rk = rank(total) }");
+            assertTrue(plan.sql().contains("RANK() OVER (ORDER BY g.[total] DESC) AS [rk]"), plan.sql());
+            assertEquals(TaqlType.INTEGER, plan.columns().getLast().type());
+        }
+
+        @Test
+        void lagKeepsTheTypeOfWhatItReads() {
+            Plan plan = compiler.compileUncached(
+                    "analysis by Country, y = year(TransactionDate) {"
+                            + "  total = sum(TransactionValue)"
+                            + "  prev = lag(total) within Country ordered by y }");
+            assertTrue(plan.sql().contains(
+                    "LAG(g.[total]) OVER (PARTITION BY g.[Country] ORDER BY g.[y] ASC) AS [prev]"), plan.sql());
+            assertEquals(TaqlType.DECIMAL, plan.columns().getLast().type());
+        }
+
+        @Test
+        void topWithinBecomesARowNumberPredicateNotATopClause() {
+            Plan plan = compiler.compileUncached(
+                    "analysis by Country, CounterpartyName { total = sum(TransactionValue) }"
+                            + " top 2 by total within Country");
+            assertAll(
+                    () -> assertTrue(plan.sql().contains(
+                            "ROW_NUMBER() OVER (PARTITION BY g.[Country] ORDER BY g.[total] DESC)"), plan.sql()),
+                    () -> assertTrue(plan.sql().contains("WHERE w.[__rank] <= ?")),
+                    // A per-group cap is not a global one.
+                    () -> assertFalse(plan.sql().contains("TOP")),
+                    () -> assertTrue(plan.sql().contains("ORDER BY [Country] ASC, [total] DESC")));
+        }
+
+        @Test
+        void aWindowOverAParameterisedGroupKeyStacksAllThreeLevels() {
+            // The computed key needs its own derived table; the window needs a
+            // level above the GROUP BY. Both at once must nest, not collide.
+            Plan plan = compiler.compileUncached(
+                    "analysis by b = match Currency { ['CHF'] -> 'local'  _ -> 'foreign' } {"
+                            + "  total = sum(TransactionValue)"
+                            + "  pct = share(total) }");
+            assertAll(
+                    () -> assertEquals(2, plan.sql().split("FROM \\(", -1).length - 1, plan.sql()),
+                    () -> assertTrue(plan.sql().contains("END AS [b]")),
+                    () -> assertTrue(plan.sql().contains("GROUP BY g.[b]")),
+                    () -> assertTrue(plan.sql().contains("NULLIF(SUM(g.[total])")));
+        }
+
+        @Test
+        void aWindowFunctionMustNameAnOutputOfItsOwnQuery() {
+            TaqlException e = assertThrows(TaqlException.class, () -> compiler.compileUncached(
+                    "analysis by Country { total = sum(TransactionValue)  rk = rank(nope) }"));
+            assertTrue(e.getMessage().contains("must name a group key or measure"), e.getMessage());
+        }
+
+        @Test
+        void aWindowFunctionCannotReadAnotherWindowFunction() {
+            // Chaining would need the measures ordered by dependency; one level is enough.
+            TaqlException e = assertThrows(TaqlException.class, () -> compiler.compileUncached(
+                    "analysis by Country { total = sum(TransactionValue)"
+                            + "  pct = share(total)  rk = rank(pct) }"));
+            assertTrue(e.getMessage().contains("is itself a window function"), e.getMessage());
+        }
+
+        @Test
+        void lagWithoutAnOrderingIsRejected() {
+            TaqlException e = assertThrows(TaqlException.class, () -> compiler.compileUncached(
+                    "analysis by Country { total = sum(TransactionValue)  prev = lag(total) }"));
+            assertTrue(e.getMessage().contains("needs an explicit 'ordered by"), e.getMessage());
+        }
+
+        @Test
+        void orderingAShareIsMeaningless() {
+            TaqlException e = assertThrows(TaqlException.class, () -> compiler.compileUncached(
+                    "analysis by Country, Currency { total = sum(TransactionValue)"
+                            + "  pct = share(total) ordered by Currency }"));
+            assertTrue(e.getMessage().contains("has no ordering"), e.getMessage());
+        }
+
+        @Test
+        void aWindowFunctionCannotTakeAWhenFilter() {
+            TaqlException e = assertThrows(TaqlException.class, () -> compiler.compileUncached(
+                    "analysis by Country { total = sum(TransactionValue)"
+                            + "  rk = rank(total) when Direction = 'C' }"));
+            assertTrue(e.getMessage().contains("cannot take a 'when' filter"), e.getMessage());
+        }
+
+        @Test
+        void withinNeedsSomethingToRankOn() {
+            TaqlException e = assertThrows(TaqlException.class, () -> compiler.compileUncached(
+                    "analysis by Country { total = sum(TransactionValue) } top 2 within Country"));
+            assertTrue(e.getMessage().contains("also needs 'by <measure>'"), e.getMessage());
+        }
+
+        @Test
+        void withinIsNotValidOnAFlatQuery() {
+            TaqlException e = assertThrows(TaqlException.class, () -> compiler.compileUncached(
+                    "list { TransactionId } top 2 within Country"));
+            assertTrue(e.getMessage().contains("only valid on an analysis query"), e.getMessage());
+        }
+
+        @Test
+        void theWindowSpecIsPartOfTheShapeKey() {
+            Plan global = compiler.compileUncached(
+                    "analysis by Country, Currency { t = sum(TransactionValue)  p = share(t) }");
+            Plan scoped = compiler.compileUncached(
+                    "analysis by Country, Currency { t = sum(TransactionValue)  p = share(t) within Country }");
+            assertFalse(global.shapeKey().equals(scoped.shapeKey()));
         }
     }
 

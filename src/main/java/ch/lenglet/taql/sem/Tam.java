@@ -61,6 +61,16 @@ public final class Tam {
     public record Aggregate(String function, boolean distinct, Expr argument, Pred filter, TaqlType type)
             implements Expr {}
 
+    /**
+     * A window function computed over the grouped result.
+     *
+     * {@code argument}, {@code partition} and {@code order} are all
+     * {@link OutputRef}s -- window functions read the query's own outputs, never
+     * base columns, which is why they are emitted one level above the GROUP BY.
+     */
+    public record Window(String function, OutputRef argument, List<OutputRef> partition,
+                         OutputRef order, boolean descending, TaqlType type) implements Expr {}
+
     /** Reference to an output column by alias -- only legal in ORDER BY. */
     public record OutputRef(String alias, TaqlType type) implements Expr {}
 
@@ -104,20 +114,33 @@ public final class Tam {
      *              default cap is configured -- in which case the statement is
      *              emitted without a TOP clause at all.
      */
+    /**
+     * Keeps the per-group row filter of {@code top N by m within k} separate from
+     * {@code limit}: one becomes a ROW_NUMBER predicate, the other a TOP clause.
+     */
+    public record RankFilter(List<OutputRef> partition, OutputRef order, boolean descending, Expr limit) {}
+
     public record Query(Kind kind,
                         Catalog.Entity entity,
                         Set<String> joins,
                         List<Output> groups,
                         List<Output> measures,
+                        List<Output> windows,
                         List<Output> projections,
                         Pred filter,
                         List<Sort> sort,
-                        Expr limit) {
+                        Expr limit,
+                        RankFilter rankFilter) {
 
         public List<Output> outputs() {
-            return kind == Kind.ANALYSIS
-                    ? java.util.stream.Stream.concat(groups.stream(), measures.stream()).toList()
-                    : projections;
+            if (kind != Kind.ANALYSIS) return projections;
+            return java.util.stream.Stream.of(groups, measures, windows)
+                    .flatMap(List::stream).toList();
+        }
+
+        /** True when the statement needs a level above the GROUP BY. */
+        public boolean hasWindowLevel() {
+            return !windows.isEmpty() || rankFilter != null;
         }
     }
 }
