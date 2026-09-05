@@ -1,5 +1,6 @@
 package ch.lenglet.taql.catalog;
 
+import ch.lenglet.taql.SqlType;
 import ch.lenglet.taql.TaqlType;
 
 import java.util.LinkedHashMap;
@@ -77,9 +78,9 @@ public record Catalog(Map<String, Entity> entities) {
      *                   an implicit conversion (which would kill index seeks).
      */
     public record Field(String name, List<String> aliases, TaqlType type,
-                        String tableAlias, String column, String sqlType) {
+                        String tableAlias, String column, SqlType sqlType) {
 
-        public static Field of(String name, TaqlType type, String tableAlias, String column, String sqlType) {
+        public static Field of(String name, TaqlType type, String tableAlias, String column, SqlType sqlType) {
             return new Field(name, List.of(), type, tableAlias, column, sqlType);
         }
 

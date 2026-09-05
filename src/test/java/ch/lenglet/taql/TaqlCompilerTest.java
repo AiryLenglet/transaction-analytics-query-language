@@ -2,6 +2,7 @@ package ch.lenglet.taql;
 
 import ch.lenglet.taql.catalog.Catalog;
 import ch.lenglet.taql.catalog.DemoCatalog;
+import ch.lenglet.taql.SqlType;
 import ch.lenglet.taql.plan.Plan;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -186,7 +187,7 @@ class TaqlCompilerTest {
         void bindsAgainstTheColumnsPhysicalTypeNotAGenericOne() {
             Plan plan = compiler.compileUncached("list { transactionId } over { direction = 'C' }");
             Plan.Auto slot = (Plan.Auto) plan.parameters().get(1);
-            assertEquals("varchar(1)", slot.sqlType());
+            assertEquals(new SqlType.VarChar(1), slot.sqlType());
         }
 
         @Test
@@ -322,6 +323,53 @@ class TaqlCompilerTest {
 
     // ==================================================================
     @Nested
+    @DisplayName("SQL types")
+    class SqlTypes {
+
+        @Test
+        void rendersTheTsqlSpelling() {
+            assertAll(
+                    () -> assertEquals("varchar(50)", new SqlType.VarChar(50).sql()),
+                    () -> assertEquals("varchar(max)", new SqlType.VarChar(SqlType.MAX).sql()),
+                    () -> assertEquals("nvarchar(200)", new SqlType.NVarChar(200).sql()),
+                    () -> assertEquals("decimal(10,2)", new SqlType.Decimal(10, 2).sql()),
+                    () -> assertEquals("datetime2(7)", new SqlType.DateTime2(7).sql()),
+                    () -> assertEquals("date", new SqlType.Date().sql()),
+                    () -> assertEquals("bit", new SqlType.Bit().sql()));
+        }
+
+        @Test
+        void rejectsTypesTheServerWouldReject() {
+            assertAll(
+                    () -> assertThrows(IllegalArgumentException.class, () -> new SqlType.VarChar(0)),
+                    () -> assertThrows(IllegalArgumentException.class, () -> new SqlType.VarChar(9000)),
+                    // char has no (max) form
+                    () -> assertThrows(IllegalArgumentException.class, () -> new SqlType.Char(SqlType.MAX)),
+                    () -> assertThrows(IllegalArgumentException.class, () -> new SqlType.Decimal(10, 11)),
+                    () -> assertThrows(IllegalArgumentException.class, () -> new SqlType.Decimal(39, 0)),
+                    () -> assertThrows(IllegalArgumentException.class, () -> new SqlType.DateTime2(8)));
+        }
+
+        @Test
+        void onlyTheNationalTypesAreUnicode() {
+            assertAll(
+                    () -> assertTrue(new SqlType.NVarChar(50).unicode()),
+                    () -> assertTrue(new SqlType.NChar(50).unicode()),
+                    () -> assertFalse(new SqlType.VarChar(50).unicode()),
+                    () -> assertFalse(new SqlType.Date().unicode()));
+        }
+
+        @Test
+        void aListVariableRendersItsElementTypeIntoTheOpenjsonClause() {
+            // The type reaches the SQL text through SqlType.sql(), not as a
+            // string carried around from the catalog.
+            assertTrue(compiler.compileUncached("list { transactionId } over { currency in $c }")
+                    .sql().contains("WITH ([value] varchar(3) '$')"));
+        }
+    }
+
+    // ==================================================================
+    @Nested
     @DisplayName("catalog joins")
     class Joins {
 
@@ -339,8 +387,8 @@ class TaqlCompilerTest {
                                 new Catalog.Table("dbo", "Customers", "c"), true,
                                 "o.[CustomerId] = c.[CustomerId]")),
                         List.of(
-                                Catalog.Field.of("orderId", TaqlType.STRING, "o", "OrderId", "varchar(50)"),
-                                Catalog.Field.of("customerName", TaqlType.STRING, "c", "Name", "varchar(200)"))))));
+                                Catalog.Field.of("orderId", TaqlType.STRING, "o", "OrderId", new SqlType.VarChar(50)),
+                                Catalog.Field.of("customerName", TaqlType.STRING, "c", "Name", new SqlType.VarChar(200)))))));
 
         @Test
         void readingAJoinedFieldPullsInItsJoin() {

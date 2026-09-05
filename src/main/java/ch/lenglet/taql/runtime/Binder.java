@@ -48,11 +48,19 @@ public final class Binder {
             Object value = values.get(i);
             int index = i + 1;
             if (value == null) {
-                statement.setNull(index, jdbcType(slot.type()));
+                // The physical type, not the DSL type, is what the server expects.
+                statement.setNull(index, slot.sqlType().jdbcType());
                 continue;
             }
             switch (value) {
-                case String s -> statement.setString(index, s);
+                // Sending a varchar column an NVARCHAR parameter makes SQL Server
+                // convert the column rather than seek on it, so the decision is
+                // made per parameter from its own type rather than by a
+                // connection-wide sendStringParametersAsUnicode switch.
+                case String s -> {
+                    if (slot.sqlType().unicode()) statement.setNString(index, s);
+                    else statement.setString(index, s);
+                }
                 case Long l -> statement.setLong(index, l);
                 case Integer n -> statement.setInt(index, n);
                 case BigDecimal d -> statement.setBigDecimal(index, d);
@@ -131,16 +139,5 @@ public final class Binder {
             }
         }
         return sb.append('"').toString();
-    }
-
-    private static int jdbcType(TaqlType type) {
-        return switch (type.kind()) {
-            case STRING, NULL, LIST -> Types.VARCHAR;
-            case INTEGER -> Types.BIGINT;
-            case DECIMAL -> Types.DECIMAL;
-            case DATE -> Types.DATE;
-            case TIMESTAMP -> Types.TIMESTAMP;
-            case BOOLEAN -> Types.BIT;
-        };
     }
 }

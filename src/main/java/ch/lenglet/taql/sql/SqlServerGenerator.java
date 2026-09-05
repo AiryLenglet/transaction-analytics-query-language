@@ -1,5 +1,6 @@
 package ch.lenglet.taql.sql;
 
+import ch.lenglet.taql.SqlType;
 import ch.lenglet.taql.TaqlType;
 import ch.lenglet.taql.catalog.Catalog;
 import ch.lenglet.taql.plan.Plan;
@@ -455,12 +456,13 @@ public final class SqlServerGenerator {
      */
     private void inVariable(Tam.InVariable v) {
         Tam.Variable var = v.variable();
-        String elementSqlType = var.sqlType() != null ? var.sqlType() : "varchar(400)";
+        SqlType elementType = var.sqlType() != null ? var.sqlType() : new SqlType.VarChar(400);
         expr(v.subject());
         sql.append(v.negated() ? " NOT IN (" : " IN (");
-        sql.append("SELECT [value] FROM OPENJSON(?) WITH ([value] ").append(elementSqlType).append(" '$')");
+        // The rendered type comes from SqlType, not from a string in the catalog.
+        sql.append("SELECT [value] FROM OPENJSON(?) WITH ([value] ").append(elementType.sql()).append(" '$')");
         sql.append(")");
-        parameters.add(new Plan.VariableList(var.name(), var.type().element(), elementSqlType));
+        parameters.add(new Plan.VariableList(var.name(), var.type().element(), elementType));
     }
 
     private void combine(List<Tam.Pred> operands, String separator) {

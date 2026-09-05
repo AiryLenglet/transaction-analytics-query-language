@@ -87,8 +87,16 @@ every time and hit L1.
 **Bind types match column types.** The resolver types a literal from the column
 it is compared against, so `'2010-01-01'` binds as a `date` and `'C'` as
 `varchar(1)`. Sending them as generic strings would make SQL Server convert the
-column per row and lose the index seek. For the same reason the demo sets
-`sendStringParametersAsUnicode=false`.
+column per row and lose the index seek.
+
+Physical types are `SqlType`, a sealed hierarchy of records (`VarChar(50)`,
+`Decimal(10,2)`, `DateTime2(7)`, ...), not strings. That buys three things: the
+only route a type takes into generated SQL is `SqlType.sql()` rather than a
+string spliced in from the catalog; `unicode()` lets `Binder` choose
+`setNString` vs `setString` per parameter, so the varchar/nvarchar decision no
+longer depends on a connection-wide `sendStringParametersAsUnicode` switch (the
+demo still sets it, as a backstop); and constructors reject types the server
+would reject — `VarChar(9000)`, `Decimal(10,11)`, `DateTime2(8)`.
 
 **List variables bind as one parameter.** `clientId in $clients` has unknown
 arity at plan time, so it lowers to

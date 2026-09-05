@@ -1,5 +1,6 @@
 package ch.lenglet.taql.sem;
 
+import ch.lenglet.taql.SqlType;
 import ch.lenglet.taql.TaqlType;
 import ch.lenglet.taql.catalog.Catalog;
 
@@ -33,10 +34,10 @@ public final class Tam {
     public record Column(Catalog.Field field, TaqlType type) implements Expr {}
 
     /** Auto-parameterised constant: the value is literals[slot] of the *calling* query. */
-    public record LiteralRef(int slot, TaqlType type, String sqlType) implements Expr {}
+    public record LiteralRef(int slot, TaqlType type, SqlType sqlType) implements Expr {}
 
     /** A named query variable supplied at execution time. */
-    public record Variable(String name, TaqlType type, String sqlType) implements Expr {}
+    public record Variable(String name, TaqlType type, SqlType sqlType) implements Expr {}
 
     public record NullValue(TaqlType type) implements Expr {}
 
@@ -45,7 +46,7 @@ public final class Tam {
      * default row cap). It is shape-invariant, so unlike a {@link LiteralRef}
      * it is safe to store its value inside a cached plan.
      */
-    public record Constant(Object value, TaqlType type, String sqlType) implements Expr {}
+    public record Constant(Object value, TaqlType type, SqlType sqlType) implements Expr {}
 
     public record Unary(String op, Expr operand, TaqlType type) implements Expr {}
 

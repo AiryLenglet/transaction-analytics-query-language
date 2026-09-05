@@ -2,6 +2,7 @@ package ch.lenglet.taql.sem;
 
 import ch.lenglet.taql.Diagnostic;
 import ch.lenglet.taql.TaqlException;
+import ch.lenglet.taql.SqlType;
 import ch.lenglet.taql.TaqlType;
 import ch.lenglet.taql.ast.Ast;
 import ch.lenglet.taql.catalog.Catalog;
@@ -153,10 +154,10 @@ public final class Resolver {
      * absent 'top' becomes a compiler-supplied constant rather than no limit.
      */
     private Tam.Expr limit(Ast.Top top) {
-        if (top == null) return new Tam.Constant((long) options.defaultRowLimit(), TaqlType.INTEGER, "int");
+        if (top == null) return new Tam.Constant((long) options.defaultRowLimit(), TaqlType.INTEGER, new SqlType.Int());
         return switch (top.count()) {
-            case Ast.Lit l -> new Tam.LiteralRef(l.slot(), TaqlType.INTEGER, "int");
-            case Ast.Param p -> variable(p, TaqlType.INTEGER, "int");
+            case Ast.Lit l -> new Tam.LiteralRef(l.slot(), TaqlType.INTEGER, new SqlType.Int());
+            case Ast.Param p -> variable(p, TaqlType.INTEGER, new SqlType.Int());
             default -> throw fail(top.pos(), Diagnostic.Phase.TYPE, "'top' expects a number or a $variable");
         };
     }
@@ -236,7 +237,7 @@ public final class Resolver {
                 if (subject.type().kind() != TaqlType.Kind.STRING) {
                     error(l.pos(), Diagnostic.Phase.TYPE, "'like' needs a text field but got " + subject.type());
                 }
-                yield new Tam.Like(subject, coerce(expr(l.pattern(), false), TaqlType.STRING, "varchar(400)", l.pos()),
+                yield new Tam.Like(subject, coerce(expr(l.pattern(), false), TaqlType.STRING, new SqlType.VarChar(400), l.pos()),
                         l.negated());
             }
         };
@@ -396,7 +397,7 @@ public final class Resolver {
         return coerce(other, anchor.type(), sqlTypeOf(anchor), pos);
     }
 
-    private static String sqlTypeOf(Tam.Expr e) {
+    private static SqlType sqlTypeOf(Tam.Expr e) {
         return e instanceof Tam.Column c ? c.field().sqlType() : null;
     }
 
@@ -405,10 +406,10 @@ public final class Resolver {
      * NULL can change type: a column never silently converts, because that is
      * exactly the implicit conversion that stops SQL Server using an index.
      */
-    private Tam.Expr coerce(Tam.Expr e, TaqlType target, String sqlType, Ast.Pos pos) {
+    private Tam.Expr coerce(Tam.Expr e, TaqlType target, SqlType sqlType, Ast.Pos pos) {
         if (target == null) return e;
 
-        String effective = sqlType != null ? sqlType : sqlTypeFor(target);
+        SqlType effective = sqlType != null ? sqlType : sqlTypeFor(target);
 
         // Same logical type, but we now know the physical type of the column
         // this value is compared against. Adopting it is the difference between
@@ -491,14 +492,14 @@ public final class Resolver {
     // Variables
     // ------------------------------------------------------------------
 
-    private Tam.Variable variable(Ast.Param p, TaqlType type, String sqlType) {
+    private Tam.Variable variable(Ast.Param p, TaqlType type, SqlType sqlType) {
         TaqlType known = variableTypes.get(p.name());
         TaqlType resolved = known == null || known.kind() == TaqlType.Kind.NULL ? type : known;
         variableTypes.put(p.name(), resolved);
         return new Tam.Variable(p.name(), resolved, sqlType != null ? sqlType : sqlTypeFor(resolved));
     }
 
-    private Tam.Variable retypeVariable(Tam.Variable v, TaqlType target, String sqlType, Ast.Pos pos) {
+    private Tam.Variable retypeVariable(Tam.Variable v, TaqlType target, SqlType sqlType, Ast.Pos pos) {
         TaqlType known = variableTypes.get(v.name());
         if (known != null && known.kind() != TaqlType.Kind.NULL && !known.equals(target)
                 && !(known.isNumeric() && target.isNumeric())) {
@@ -518,15 +519,16 @@ public final class Resolver {
         });
     }
 
-    static String sqlTypeFor(TaqlType type) {
+    /** Fallback physical type for a value with no column to take one from. */
+    static SqlType sqlTypeFor(TaqlType type) {
         return switch (type.kind()) {
-            case STRING -> "varchar(400)";
-            case INTEGER -> "bigint";
-            case DECIMAL -> "decimal(38,10)";
-            case DATE -> "date";
-            case TIMESTAMP -> "datetime2";
-            case BOOLEAN -> "bit";
-            case NULL -> "varchar(400)";
+            case STRING -> new SqlType.VarChar(400);
+            case INTEGER -> new SqlType.BigInt();
+            case DECIMAL -> new SqlType.Decimal(38, 10);
+            case DATE -> new SqlType.Date();
+            case TIMESTAMP -> new SqlType.DateTime2(7);
+            case BOOLEAN -> new SqlType.Bit();
+            case NULL -> new SqlType.VarChar(400);
             case LIST -> sqlTypeFor(type.element());
         };
     }

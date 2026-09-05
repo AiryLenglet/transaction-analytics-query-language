@@ -1,5 +1,6 @@
 package ch.lenglet.taql.plan;
 
+import ch.lenglet.taql.SqlType;
 import ch.lenglet.taql.TaqlType;
 
 import java.util.List;
@@ -35,20 +36,20 @@ public record Plan(String sql,
     /** Where one bound parameter's value comes from. */
     public sealed interface ParamSlot {
         TaqlType type();
-        String sqlType();
+        SqlType sqlType();
     }
 
     /** Auto-parameterised user literal: value = literals[index] of the query being run. */
-    public record Auto(int index, TaqlType type, String sqlType) implements ParamSlot {}
+    public record Auto(int index, TaqlType type, SqlType sqlType) implements ParamSlot {}
 
     /** A named $variable supplied by the caller. */
-    public record Variable(String name, TaqlType type, String sqlType) implements ParamSlot {}
+    public record Variable(String name, TaqlType type, SqlType sqlType) implements ParamSlot {}
 
     /** A compiler-supplied constant, e.g. the default row cap. Shape-invariant, so it lives in the plan. */
-    public record Constant(Object value, TaqlType type, String sqlType) implements ParamSlot {}
+    public record Constant(Object value, TaqlType type, SqlType sqlType) implements ParamSlot {}
 
     /** A whole list bound as a single JSON parameter -- see SqlServerGenerator. */
-    public record VariableList(String name, TaqlType elementType, String sqlType) implements ParamSlot {
+    public record VariableList(String name, TaqlType elementType, SqlType sqlType) implements ParamSlot {
         @Override
         public TaqlType type() {
             return TaqlType.listOf(elementType);

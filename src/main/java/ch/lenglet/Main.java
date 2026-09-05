@@ -98,7 +98,7 @@ public final class Main {
                 case Plan.Constant ignored -> "compiler default";
             };
             System.out.printf("  ?%-3d %-22s %-12s %s%n",
-                    i + 1, origin, slot.sqlType(), render(values.get(i)));
+                    i + 1, origin, slot.sqlType().sql(), render(values.get(i)));
         }
         System.out.println();
     }
