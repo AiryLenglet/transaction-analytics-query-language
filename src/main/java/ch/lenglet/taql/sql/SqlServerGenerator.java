@@ -29,9 +29,13 @@ import java.util.Set;
 public final class SqlServerGenerator {
 
     private static final String DERIVED = "g";
+    private static final String ROOT = "";
 
     private final StringBuilder sql = new StringBuilder();
     private final List<Plan.ParamSlot> parameters = new ArrayList<>();
+
+    /** Source name (ROOT, or a join name) -> the alias this statement gives it. */
+    private Map<String, String> tableAliases = Map.of();
 
     /** When set, column references resolve to the derived table instead of the base tables. */
     private Map<Catalog.Field, String> derivedNames;
@@ -46,6 +50,7 @@ public final class SqlServerGenerator {
     }
 
     private void query(Tam.Query q) {
+        tableAliases = allocateAliases(q.entity());
         if (q.kind() == Tam.Kind.ANALYSIS && needsDerivedTable(q)) {
             analysisOverDerivedTable(q);
             return;
@@ -137,7 +142,7 @@ public final class SqlServerGenerator {
         }
         for (Map.Entry<Catalog.Field, String> e : names.entrySet()) {
             sql.append(",\n           ")
-               .append(e.getKey().tableAlias()).append(".").append(quote(e.getKey().column()))
+               .append(aliasOf(e.getKey())).append(".").append(quote(e.getKey().column()))
                .append(" AS ").append(quote(e.getValue()));
         }
         sql.append("\n    ");
@@ -252,13 +257,24 @@ public final class SqlServerGenerator {
 
     private void fromClause(Tam.Query q) {
         Catalog.Entity e = q.entity();
-        sql.append("FROM ").append(table(e.table())).append("\n");
+        String root = tableAliases.get(ROOT);
+        sql.append("FROM ").append(table(e.table(), root)).append("\n");
         // Emit joins in catalog order so the SQL text is stable for a given shape.
         for (Catalog.Join j : e.joins()) {
             if (!q.joins().contains(j.name())) continue;
+            String alias = tableAliases.get(j.name());
             sql.append(j.inner() ? "INNER JOIN " : "LEFT JOIN ")
-               .append(table(j.table()))
-               .append(" ON ").append(j.on()).append("\n");
+               .append(table(j.table(), alias))
+               .append(" ON ");
+            // Built from column pairs, so the condition is never SQL text from config.
+            for (int i = 0; i < j.on().size(); i++) {
+                if (i > 0) sql.append(" AND ");
+                Catalog.Join.On on = j.on().get(i);
+                sql.append(root).append(".").append(quote(on.rootColumn()))
+                   .append(" = ")
+                   .append(alias).append(".").append(quote(on.joinedColumn()));
+            }
+            sql.append("\n");
         }
     }
 
@@ -301,7 +317,7 @@ public final class SqlServerGenerator {
             case Tam.Column c -> {
                 String derived = derivedNames == null ? null : derivedNames.get(c.field());
                 if (derived != null) sql.append(DERIVED).append(".").append(quote(derived));
-                else sql.append(c.field().tableAlias()).append(".").append(quote(c.field().column()));
+                else sql.append(aliasOf(c.field())).append(".").append(quote(c.field().column()));
             }
             case Tam.OutputRef o -> sql.append(quote(o.alias()));
             case Tam.NullValue ignored -> sql.append("NULL");
@@ -510,8 +526,43 @@ public final class SqlServerGenerator {
         };
     }
 
-    private static String table(Catalog.Table t) {
-        return quote(t.schema()) + "." + quote(t.name()) + " AS " + t.alias();
+    /**
+     * Aliases are assigned here rather than stored in the catalog, so a table can
+     * appear in a catalog without committing to a name in every statement.
+     *
+     * Every table of the entity gets one, whether or not this query uses it, so a
+     * given table reads the same across every plan on that entity. Allocation is
+     * a pure function of the entity, so the SQL text stays byte-identical for a
+     * given query shape and the plan cache is unaffected.
+     */
+    private static Map<String, String> allocateAliases(Catalog.Entity entity) {
+        Set<String> taken = new LinkedHashSet<>();
+        taken.add(DERIVED);
+        Map<String, String> aliases = new LinkedHashMap<>();
+        aliases.put(ROOT, allocate(entity.table().name(), taken));
+        for (Catalog.Join j : entity.joins()) aliases.put(j.name(), allocate(j.table().name(), taken));
+        return Map.copyOf(aliases);
+    }
+
+    private static String allocate(String tableName, Set<String> taken) {
+        String base = "x";
+        for (int i = 0; i < tableName.length(); i++) {
+            if (Character.isLetter(tableName.charAt(i))) {
+                base = String.valueOf(Character.toLowerCase(tableName.charAt(i)));
+                break;
+            }
+        }
+        String candidate = base;
+        for (int n = 2; !taken.add(candidate); n++) candidate = base + n;
+        return candidate;
+    }
+
+    private String aliasOf(Catalog.Field field) {
+        return tableAliases.get(field.source());
+    }
+
+    private String table(Catalog.Table t, String alias) {
+        return quote(t.schema()) + "." + quote(t.name()) + " AS " + alias;
     }
 
     /** Catalog-sourced identifiers only; the bracket-doubling is belt and braces. */

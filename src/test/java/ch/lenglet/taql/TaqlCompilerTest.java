@@ -41,7 +41,7 @@ class TaqlCompilerTest {
                     }
                     over {
                         ClientId in ['1', '3']
-                        date in '2010-01-01'..'2019-12-31'
+                        TransactionDate in '2010-01-01'..'2019-12-31'
                     }
                     """);
 
@@ -67,7 +67,7 @@ class TaqlCompilerTest {
         @Test
         void topByOrdersOnTheNamedMeasure() {
             Plan plan = compiler.compileUncached("""
-                    analysis by country { total = sum(amount) } top 10 by total
+                    analysis by country { total = sum(TransactionValue) } top 10 by total
                     """);
             assertTrue(plan.sql().contains("ORDER BY [total] DESC"));
         }
@@ -78,7 +78,7 @@ class TaqlCompilerTest {
             // different expressions (@P1.. vs @P13..) and reject the query.
             Plan plan = compiler.compileUncached("""
                     analysis by bucket = match currency { ['CHF'] -> 'local'  _ -> 'foreign' } {
-                        total = sum(amount) when direction = 'C'
+                        total = sum(TransactionValue) when direction = 'C'
                     }
                     """);
             assertAll(
@@ -92,9 +92,9 @@ class TaqlCompilerTest {
 
         @Test
         void groupsInlineWhenTheKeyHasNoParameters() {
-            // YEAR(date) repeats harmlessly, so no derived table is needed.
+            // YEAR(TransactionDate) repeats harmlessly, so no derived table is needed.
             Plan plan = compiler.compileUncached(
-                    "analysis by y = year(date) { total = sum(amount) }");
+                    "analysis by y = year(TransactionDate) { total = sum(TransactionValue) }");
             assertFalse(plan.sql().contains("FROM ("));
             assertTrue(plan.sql().contains("GROUP BY YEAR(t.[TransactionDate])"));
         }
@@ -102,7 +102,7 @@ class TaqlCompilerTest {
         @Test
         void rejectsTopByAnUnknownMeasure() {
             TaqlException e = assertThrows(TaqlException.class, () -> compiler.compileUncached(
-                    "analysis by country { total = sum(amount) } top 10 by nope"));
+                    "analysis by country { total = sum(TransactionValue) } top 10 by nope"));
             assertTrue(e.getMessage().contains("must name one of the measures"));
         }
     }
@@ -115,15 +115,15 @@ class TaqlCompilerTest {
         @Test
         void compilesProjectionsFilterSortAndLimit() {
             Plan plan = compiler.compileUncached("""
-                    list { transactionId, amount, country }
-                    over { clientId in ['1','3'], amount > 100 }
-                    sort by amount desc
+                    list { transactionId, TransactionValue, country }
+                    over { clientId in ['1','3'], TransactionValue > 100 }
+                    sort by TransactionValue desc
                     top 5
                     """);
             assertAll(
                     () -> assertTrue(plan.sql().startsWith("SELECT TOP (?)")),
                     () -> assertTrue(plan.sql().contains("t.[ClientId] IN (?, ?)")),
-                    () -> assertTrue(plan.sql().contains("ORDER BY [amount] DESC")),
+                    () -> assertTrue(plan.sql().contains("ORDER BY [TransactionValue] DESC")),
                     () -> assertFalse(plan.sql().contains("GROUP BY")));
         }
 
@@ -137,7 +137,7 @@ class TaqlCompilerTest {
         @Test
         void rejectsAggregatesOutsideAnAnalysisBlock() {
             TaqlException e = assertThrows(TaqlException.class,
-                    () -> compiler.compileUncached("list { x = sum(amount) }"));
+                    () -> compiler.compileUncached("list { x = sum(TransactionValue) }"));
             assertTrue(e.getMessage().contains("only appear in an analysis measure block"));
         }
     }
@@ -151,7 +151,7 @@ class TaqlCompilerTest {
         void infersVariableTypesFromTheirUseSite() {
             Plan plan = compiler.compileUncached("""
                     list { transactionId }
-                    over { clientId in $clients, date in $from..$to }
+                    over { clientId in $clients, TransactionDate in $from..$to }
                     top $limit
                     """);
             assertAll(
@@ -178,7 +178,7 @@ class TaqlCompilerTest {
         @Test
         void convertsLiteralsToTheColumnType() {
             List<Object> values = compiler.compile(
-                    "list { transactionId } over { date in '2010-01-01'..'2019-12-31' }").bind();
+                    "list { transactionId } over { TransactionDate in '2010-01-01'..'2019-12-31' }").bind();
             assertEquals(java.time.LocalDate.of(2010, 1, 1), values.get(1));
             assertEquals(java.time.LocalDate.of(2019, 12, 31), values.get(2));
         }
@@ -235,7 +235,7 @@ class TaqlCompilerTest {
         void literalOrderIsStableAcrossFormattingSoSlotIndicesStayValid() {
             // Plan.Auto slots index into the *calling* query's literal table, so
             // two texts sharing a plan must lift their literals in the same order.
-            String a = "list { transactionId } over { clientId in ['1','2'], direction = 'C', amount > 10 }";
+            String a = "list { transactionId } over { clientId in ['1','2'], direction = 'C', TransactionValue > 10 }";
             String b = """
                     list {
                         transactionId   // same shape, different layout and values
@@ -243,7 +243,7 @@ class TaqlCompilerTest {
                     over {
                         clientId in ['8','9']
                         direction = 'D'
-                        amount > 99
+                        TransactionValue > 99
                     }
                     """;
             var first = compiler.compile(a);
@@ -382,13 +382,13 @@ class TaqlCompilerTest {
         private final TaqlCompiler joined = new TaqlCompiler(new Catalog(Map.of("orders",
                 new Catalog.Entity(
                         "orders",
-                        new Catalog.Table("dbo", "Orders", "o"),
-                        List.of(new Catalog.Join("customer",
-                                new Catalog.Table("dbo", "Customers", "c"), true,
-                                "o.[CustomerId] = c.[CustomerId]")),
+                        new Catalog.Table("dbo", "Orders"),
+                        List.of(Catalog.Join.inner("customer",
+                                new Catalog.Table("dbo", "Customers"), "CustomerId", "CustomerId")),
                         List.of(
-                                Catalog.Field.of("orderId", TaqlType.STRING, "o", "OrderId", new SqlType.VarChar(50)),
-                                Catalog.Field.of("customerName", TaqlType.STRING, "c", "Name", new SqlType.VarChar(200)))))));
+                                Catalog.Field.of("orderId", TaqlType.STRING, "OrderId", new SqlType.VarChar(50)),
+                                Catalog.Field.from("customer", "customerName", TaqlType.STRING, "Name",
+                                        new SqlType.VarChar(200)))))));
 
         @Test
         void readingAJoinedFieldPullsInItsJoin() {
@@ -405,6 +405,46 @@ class TaqlCompilerTest {
         void aJoinedFieldUsedOnlyInAFilterStillPullsInItsJoin() {
             assertTrue(joined.compileUncached("list { orderId } from orders over { customerName = 'x' }")
                     .sql().contains("INNER JOIN [dbo].[Customers]"));
+        }
+
+        @Test
+        void aTableKeepsTheSameAliasAcrossQueries() {
+            // Aliases are allocated per statement, but from the entity alone --
+            // so they do not drift with which joins a given query happens to need.
+            assertTrue(joined.compileUncached("list { orderId } from orders").sql().contains("AS o"));
+            assertTrue(joined.compileUncached("list { orderId, customerName } from orders")
+                    .sql().contains("[dbo].[Orders] AS o"));
+        }
+
+        @Test
+        void aliasesAreDisambiguatedAndAvoidTheDerivedTableName() {
+            // Customers and Contracts both want 'c'; Groups wants the name the
+            // derived table uses.
+            TaqlCompiler c = new TaqlCompiler(new Catalog(Map.of("orders", new Catalog.Entity(
+                    "orders",
+                    new Catalog.Table("dbo", "Groups"),
+                    List.of(Catalog.Join.inner("customer", new Catalog.Table("dbo", "Customers"), "Id", "Id"),
+                            Catalog.Join.left("contract", new Catalog.Table("dbo", "Contracts"), "Id", "Id")),
+                    List.of(Catalog.Field.of("id", TaqlType.STRING, "Id", new SqlType.VarChar(50)),
+                            Catalog.Field.from("customer", "customerName", TaqlType.STRING, "Name",
+                                    new SqlType.VarChar(50)),
+                            Catalog.Field.from("contract", "contractRef", TaqlType.STRING, "Ref",
+                                    new SqlType.VarChar(50)))))));
+
+            String sql = c.compileUncached("list { id, customerName, contractRef } from orders").sql();
+            assertAll(
+                    () -> assertTrue(sql.contains("[dbo].[Groups] AS g2"), sql),
+                    () -> assertTrue(sql.contains("INNER JOIN [dbo].[Customers] AS c ON g2.[Id] = c.[Id]"), sql),
+                    () -> assertTrue(sql.contains("LEFT JOIN [dbo].[Contracts] AS c2 ON g2.[Id] = c2.[Id]"), sql));
+        }
+
+        @Test
+        void aFieldPointingAtAMissingJoinFailsWhereTheCatalogIsWritten() {
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () ->
+                    new Catalog.Entity("orders", new Catalog.Table("dbo", "Orders"), List.of(),
+                            List.of(Catalog.Field.from("nope", "x", TaqlType.STRING, "X",
+                                    new SqlType.VarChar(10)))));
+            assertTrue(e.getMessage().contains("unknown join 'nope'"));
         }
     }
 
@@ -433,7 +473,7 @@ class TaqlCompilerTest {
         @Test
         void conflictingVariableUsesAreReported() {
             TaqlException e = assertThrows(TaqlException.class, () -> compiler.compileUncached(
-                    "list { transactionId } over { clientId = $x, amount > $x }"));
+                    "list { transactionId } over { clientId = $x, TransactionValue > $x }"));
             assertTrue(e.getMessage().contains("is used as"));
         }
 

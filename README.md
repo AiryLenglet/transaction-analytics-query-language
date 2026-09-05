@@ -48,6 +48,12 @@ alias or any catalog field.
 - Scalar functions: `year month day upper lower length abs round concat coalesce`.
 - Keywords are case-insensitive; `` `backticks` `` escape an identifier that
   collides with one. `//` and `/* */` comments.
+- Field names are case-insensitive but singular: each field has exactly one
+  name, with no alternate spellings. Accepting several names for one column
+  would let the same query be written more than one way, and since the plan
+  cache is keyed on the query *as written* -- it must be, the key is computed
+  before name resolution -- each spelling would compile a separate plan for
+  identical SQL.
 
 ## Design notes
 
@@ -59,13 +65,26 @@ a discipline that has to be maintained. Identifiers get the same treatment from
 the other side: a name that does not resolve to a catalog field is a compile
 error, so no user-supplied text is ever emitted as an identifier either.
 
-**The catalog is the semantic layer.** The DSL says `date` and `amount` where the
-columns are `TransactionDate` and `TransactionValue`, and it is the catalog that
-decides which names exist at all. The schema is a single table, so no query
+**The catalog is the semantic layer.** It decides which names exist at all, and
+what each one maps to. Today that mapping is 1:1 -- the DSL vocabulary is the
+column names -- but `Catalog.Field.of(name, type, column, sqlType)` exposes a
+column under a different name when the business vocabulary and the schema
+disagree (the join fixture in the tests does exactly that). The schema is a
+single table, so no query
 currently emits a join -- but `Catalog.Join` is wired through the resolver and
 generator, and resolving a field that lives on a joined table is what pulls that
 join into the plan. Since the demo schema no longer exercises it, that path is
 covered by a test-only fixture (`TaqlCompilerTest.Joins`).
+
+**The catalog holds no SQL text.** A field names the *join* it is reached
+through, a join names the *column pairs* it matches on, and the generator
+allocates table aliases when it emits the statement (derived from the table
+name, de-duplicated, never colliding with the derived-table alias). So a table
+can appear in a catalog without committing to an alias in every statement, and
+there is no string in the catalog that ends up in a query verbatim. Allocation
+is a pure function of the entity, so aliases neither drift with which joins a
+query needs nor affect the plan cache. Fields pointing at a missing join fail in
+`Catalog.Entity`'s constructor, where the catalog is written.
 
 **Two caches, because one does not work.** Caching source text to plan only
 helps if clients send byte-identical queries, and they will not — the constants

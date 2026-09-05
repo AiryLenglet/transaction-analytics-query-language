@@ -291,15 +291,7 @@ public final class Resolver {
 
     /** Using a field that lives on a joined table is what pulls the join into the plan. */
     private void requireJoinFor(Catalog.Field f) {
-        if (f.tableAlias().equals(entity.table().alias())) return;
-        for (Catalog.Join j : entity.joins()) {
-            if (j.table().alias().equals(f.tableAlias())) {
-                requiredJoins.add(j.name());
-                return;
-            }
-        }
-        throw new IllegalStateException("catalog is inconsistent: field " + f.name()
-                + " lives on unknown table alias " + f.tableAlias());
+        if (f.isJoined()) requiredJoins.add(f.source());
     }
 
     private Tam.Expr call(Ast.Call c, boolean insideAggregate) {

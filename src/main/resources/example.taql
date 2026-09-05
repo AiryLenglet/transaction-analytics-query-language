@@ -11,7 +11,7 @@ analysis by category = match transactionType {
 }
 over {
     ClientId in ['1', '3']
-    date in '2010-01-01'..'2019-12-31'
+    TransactionDate in '2010-01-01'..'2019-12-31'
 }
 -----------------
 analysis by country {
@@ -21,7 +21,7 @@ analysis by country {
 top 10 by incomingAmount
 over {
     ClientId in ['1', '3']
-    date in '2010-01-01'..'2019-12-31'
+    TransactionDate in '2010-01-01'..'2019-12-31'
 }
 -----------------
 // Same shape as the query above, different constants: this reuses the
@@ -33,39 +33,39 @@ analysis by country {
 top 10 by incomingAmount
 over {
     ClientId in ['2', '4']
-    date in '2015-01-01'..'2021-12-31'
+    TransactionDate in '2015-01-01'..'2021-12-31'
 }
 -----------------
 // Explicit variables. The plan advertises what it needs ($clients: list<string>,
 // $from/$to: date) and the caller supplies them per request, so this query text
 // is byte-identical on every call and hits the L1 cache.
-analysis by country, year = year(date) {
-    total = sum(amount)
-    largest = max(amount)
+analysis by country, year = year(TransactionDate) {
+    total = sum(TransactionValue)
+    largest = max(TransactionValue)
     distinctCounterparties = count(distinct counterpartyId)
 }
 top $limit by total
 over {
     clientId in $clients
-    date in $from..$to
-    amount > 500
+    TransactionDate in $from..$to
+    TransactionValue > 500
 }
 -----------------
 // Flat query: same filter and expression language, no grouping.
 list {
     transactionId
-    date
+    TransactionDate
     counterparty = counterpartyName
     country
-    amount
-    signedAmount = match { direction = 'C' -> amount, _ -> -amount }
+    TransactionValue
+    signedAmount = match { direction = 'C' -> TransactionValue, _ -> -TransactionValue }
 }
 over {
     clientId in ['1', '3']
-    date in '2010-01-01'..'2019-12-31'
+    TransactionDate in '2010-01-01'..'2019-12-31'
     currency in ['CHF', 'EUR']
 }
-sort by date desc, amount desc
+sort by TransactionDate desc, TransactionValue desc
 top 5
 -----------------
 // Flat query with no 'top': the compiler injects the configured row cap so a
@@ -75,7 +75,7 @@ list {
     label = concat(upper(currency), ' ', transactionType)
 }
 over {
-    amount > 1000 and (country = 'CH' or country = 'FR')
+    TransactionValue > 1000 and (country = 'CH' or country = 'FR')
     transactionId not like 'X%'
 }
 sort by transactionId
