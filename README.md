@@ -59,10 +59,13 @@ a discipline that has to be maintained. Identifiers get the same treatment from
 the other side: a name that does not resolve to a catalog field is a compile
 error, so no user-supplied text is ever emitted as an identifier either.
 
-**The catalog is the semantic layer.** `country` and `transactionType` are not
-columns on `Transactions`; they live on joined dimensions, and `date` is spelled
-`TransactionDate`. Resolving a field is what pulls its join into the plan, so
-queries only join what they actually read.
+**The catalog is the semantic layer.** The DSL says `date` and `amount` where the
+columns are `TransactionDate` and `TransactionValue`, and it is the catalog that
+decides which names exist at all. The schema is a single table, so no query
+currently emits a join -- but `Catalog.Join` is wired through the resolver and
+generator, and resolving a field that lives on a joined table is what pulls that
+join into the plan. Since the demo schema no longer exercises it, that path is
+covered by a test-only fixture (`TaqlCompilerTest.Joins`).
 
 **Two caches, because one does not work.** Caching source text to plan only
 helps if clients send byte-identical queries, and they will not — the constants

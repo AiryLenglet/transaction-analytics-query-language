@@ -1,5 +1,6 @@
 package ch.lenglet.taql;
 
+import ch.lenglet.taql.catalog.Catalog;
 import ch.lenglet.taql.catalog.DemoCatalog;
 import ch.lenglet.taql.plan.Plan;
 import org.junit.jupiter.api.DisplayName;
@@ -44,7 +45,7 @@ class TaqlCompilerTest {
                     """);
 
             assertAll(
-                    () -> assertTrue(plan.sql().contains("CASE WHEN tt.[Name] IN (?, ?) THEN ?")),
+                    () -> assertTrue(plan.sql().contains("CASE WHEN t.[TransactionType] IN (?, ?) THEN ?")),
                     () -> assertTrue(plan.sql().contains("COUNT(*)")),
                     () -> assertTrue(plan.sql().contains("t.[TransactionDate] BETWEEN ? AND ?")),
                     // The key carries parameters, so it is projected once by a
@@ -57,11 +58,9 @@ class TaqlCompilerTest {
         }
 
         @Test
-        void joinsOnlyTheTablesTheFieldsNeed() {
-            assertFalse(compiler.compileUncached("list { transactionId } over { clientId = '1' }")
+        void theFlatSchemaNeedsNoJoins() {
+            assertFalse(compiler.compileUncached("list { transactionId, country, transactionType }")
                     .sql().contains("JOIN"));
-            assertTrue(compiler.compileUncached("list { country } over { clientId = '1' }")
-                    .sql().contains("INNER JOIN [dbo].[Counterparties]"));
         }
 
         @Test
@@ -318,6 +317,46 @@ class TaqlCompilerTest {
         void unknownFunctionsAreRejected() {
             assertThrows(TaqlException.class,
                     () -> compiler.compileUncached("list { x = xp_cmdshell(transactionId) }"));
+        }
+    }
+
+    // ==================================================================
+    @Nested
+    @DisplayName("catalog joins")
+    class Joins {
+
+        /**
+         * The demo schema is a single table, so nothing there exercises the
+         * catalog's join support. This fixture keeps that path honest: a field
+         * living on a joined table must pull its join into the plan, and only
+         * when something actually reads it.
+         */
+        private final TaqlCompiler joined = new TaqlCompiler(new Catalog(Map.of("orders",
+                new Catalog.Entity(
+                        "orders",
+                        new Catalog.Table("dbo", "Orders", "o"),
+                        List.of(new Catalog.Join("customer",
+                                new Catalog.Table("dbo", "Customers", "c"), true,
+                                "o.[CustomerId] = c.[CustomerId]")),
+                        List.of(
+                                Catalog.Field.of("orderId", TaqlType.STRING, "o", "OrderId", "varchar(50)"),
+                                Catalog.Field.of("customerName", TaqlType.STRING, "c", "Name", "varchar(200)"))))));
+
+        @Test
+        void readingAJoinedFieldPullsInItsJoin() {
+            assertTrue(joined.compileUncached("list { orderId, customerName } from orders")
+                    .sql().contains("INNER JOIN [dbo].[Customers] AS c ON o.[CustomerId] = c.[CustomerId]"));
+        }
+
+        @Test
+        void aQueryThatNeverReadsTheJoinDoesNotEmitIt() {
+            assertFalse(joined.compileUncached("list { orderId } from orders").sql().contains("JOIN"));
+        }
+
+        @Test
+        void aJoinedFieldUsedOnlyInAFilterStillPullsInItsJoin() {
+            assertTrue(joined.compileUncached("list { orderId } from orders over { customerName = 'x' }")
+                    .sql().contains("INNER JOIN [dbo].[Customers]"));
         }
     }
 
