@@ -148,6 +148,56 @@ it defaults to 0, meaning no cap. A REST deployment probably wants it on, with
 the caveat that on an `analysis` query with no `top ... by` a cap truncates an
 unordered result: a guard rail, not a pagination story.
 
+## Error handling at execution
+
+Compilation already rules out malformed and mistyped queries, so a `SQLException`
+from a compiled plan is almost never "bad query" — it is the database reporting
+something about the world, and the right response differs per case.
+`SqlFailure.classify` sorts them; the codes below were observed by provoking each
+condition against SQL Server 2019 / mssql-jdbc 13.4, not read off a reference.
+
+| condition | errorCode | sqlState | classification | retry? |
+|---|---|---|---|---|
+| deadlock victim | 1205 | 40001 | `RETRYABLE` | yes |
+| connection lost | 0 | 08S01 | `RETRYABLE` | yes |
+| log/memory exhausted | 9002, 701 | — | `RESOURCE` | after backoff |
+| query timeout | 0 | HY008 | `TIMEOUT` | no |
+| divide by zero, overflow, bad conversion | 8134, 8115, 241 | — | `INVALID_DATA` | no |
+| invalid object / column name | 208, 207 | — | `SCHEMA_MISMATCH` | no |
+| permission denied | 229, 230 | — | `PERMISSION` | no |
+
+Three things that came out of measuring rather than assuming:
+
+- **Exception type tells you nothing.** mssql-jdbc throws a plain
+  `SQLServerException` for essentially every server error; the JDBC 4 subclasses
+  (`SQLDataException`, `SQLSyntaxErrorException`, …) are not used. Only the
+  client-side timeout arrived as `SQLTimeoutException`.
+- **Neither does the message.** Server messages are localised — the same
+  divide-by-zero came back in French on this server. Never match on message
+  text, and never make it the API contract.
+- **`getErrorCode()` is 0 for driver-side failures.** Timeouts and connection
+  losses carry meaning only in `getSQLState()`, whose first two characters *are*
+  standard (`08` connection, `40` rollback, `HY008` cancelled). Classification
+  needs both.
+
+What `TaqlExecutor` does with that:
+
+- **Bounds every statement** with `queryTimeout`. An endpoint that can hold a
+  pooled connection indefinitely eventually exhausts the pool and takes down
+  every other endpoint sharing it.
+- **Retries only what is worth retrying**, with exponential backoff. Every TAQL
+  query is a `SELECT`, so re-running one is side-effect free — which is what
+  makes retrying a deadlock victim safe here and not in general. A timeout is
+  never retried: it will take just as long again.
+- **Splits the response from the log.** `TaqlExecutionException.getMessage()` is
+  a fixed, generic string per category; the server's message can quote table
+  names, column names and row values, so it stays on `databaseMessage()` /
+  `logDetail()`.
+
+`SCHEMA_MISMATCH` is worth calling out: 207/208 mean the catalog claims something
+the database does not have. That is a deployment fault, not a caller fault — a
+500 and an alert, never a 400, and no retry will ever fix it.
+
 ## Not done
 
 Deliberate omissions for a POC, roughly in the order I would add them:
@@ -157,6 +207,8 @@ Deliberate omissions for a POC, roughly in the order I would add them:
 - **Authorisation.** The catalog decides which fields exist, but not which
   fields *this caller* may read. Row-level filters (e.g. force `ClientId` to the
   caller's own) belong as a mandatory predicate injected at lowering.
+- **Circuit breaking.** Retries are bounded per request but nothing sheds load
+  when the database is failing for everyone at once.
 - **Cost control.** The row cap is off by default and nothing stops
   `count(distinct x)` over an unfiltered table; a required-filter rule per
   entity, and a mandatory cap at the REST layer, would.

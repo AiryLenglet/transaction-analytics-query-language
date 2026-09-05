@@ -4,6 +4,7 @@ import ch.lenglet.taql.TaqlCompiler;
 import ch.lenglet.taql.TaqlException;
 import ch.lenglet.taql.catalog.DemoCatalog;
 import ch.lenglet.taql.plan.Plan;
+import ch.lenglet.taql.runtime.TaqlExecutionException;
 import ch.lenglet.taql.runtime.TaqlExecutor;
 import com.zaxxer.hikari.HikariDataSource;
 
@@ -55,8 +56,11 @@ public final class Main {
             } catch (TaqlException e) {
                 System.out.println("-- compile error --");
                 e.diagnostics().forEach(d -> System.out.println("  " + d));
-            } catch (SQLException e) {
-                System.out.println("-- execution failed: " + e.getMessage());
+            } catch (TaqlExecutionException e) {
+                // What a service would return, and what it would log.
+                System.out.println("-- execution failed --");
+                System.out.println("  to caller : " + e.getMessage() + "  (retryable: " + e.failure().worthRetrying() + ")");
+                System.out.println("  to log    : " + e.logDetail());
             }
             System.out.println();
         }
