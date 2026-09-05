@@ -1,0 +1,176 @@
+grammar Taql;
+
+// =====================================================================
+//  TAQL - Transaction Analytics Query Language
+//
+//  Two statement shapes share one filter / expression language:
+//
+//    analysis by <keys> { <measures> } top N by <m> over { <filters> }
+//    list { <projections> } over { <filters> } sort by <k> top N
+// =====================================================================
+
+query          : statement EOF ;
+
+statement      : analysisStatement
+               | flatStatement
+               ;
+
+analysisStatement : ANALYSIS BY groupKeyList measureBlock queryClause* ;
+
+flatStatement     : LIST projectionBlock queryClause* ;
+
+// Trailing clauses are order-insensitive; duplicates are rejected by the
+// AST builder so the user gets a semantic error with a position rather
+// than an opaque parse failure.
+queryClause    : fromClause
+               | overClause
+               | sortClause
+               | topClause
+               ;
+
+fromClause     : FROM identifier ;
+overClause     : OVER LBRACE (predicate (COMMA? predicate)*)? RBRACE ;
+sortClause     : SORT BY sortItem (COMMA? sortItem)* ;
+sortItem       : expression (ASC | DESC)? ;
+topClause      : TOP countExpr (BY identifier)? ;
+countExpr      : INT | PARAM ;
+
+// ---------- analysis ----------
+
+groupKeyList   : groupKey (COMMA? groupKey)* ;
+groupKey       : (identifier EQ)? expression ;
+
+measureBlock   : LBRACE measure (COMMA? measure)* RBRACE ;
+measure        : (identifier EQ)? aggregate (WHEN predicate)? ;
+aggregate      : identifier LPAREN (DISTINCT? expression)? RPAREN ;
+
+// ---------- flat ----------
+
+projectionBlock : LBRACE projection (COMMA? projection)* RBRACE ;
+projection      : (identifier EQ)? expression ;
+
+// ---------- predicates ----------
+
+predicate      : orPredicate ;
+orPredicate    : andPredicate (OR andPredicate)* ;
+andPredicate   : unaryPredicate (AND unaryPredicate)* ;
+unaryPredicate : NOT unaryPredicate                        # NotPredicate
+               | LPAREN predicate RPAREN                   # ParenPredicate
+               | comparison                                # ComparisonPredicate
+               ;
+
+comparison     : expression NOT? IN inSource               # InComparison
+               | expression IS NOT? NULL                   # NullComparison
+               | expression NOT? LIKE expression           # LikeComparison
+               | expression compareOp expression           # OpComparison
+               ;
+
+compareOp      : EQ | NEQ | LT | LTE | GT | GTE ;
+
+inSource       : listLiteral                               # InList
+               | expression RANGE expression               # InRange
+               | expression                                # InVariable
+               ;
+
+listLiteral    : LBRACKET (expression (COMMA expression)*)? RBRACKET ;
+
+// ---------- expressions ----------
+
+expression     : LPAREN expression RPAREN                              # ParenExpr
+               | (PLUS | MINUS) expression                             # UnaryExpr
+               | expression (STAR | SLASH | PERCENT) expression        # MulExpr
+               | expression (PLUS | MINUS) expression                  # AddExpr
+               | matchExpr                                             # MatchWrapper
+               | identifier LPAREN (expression (COMMA expression)*)? RPAREN # CallExpr
+               | literal                                               # LiteralExpr
+               | PARAM                                                 # ParamExpr
+               | identifier                                            # FieldExpr
+               ;
+
+matchExpr      : MATCH expression LBRACE valueArm (COMMA? valueArm)* RBRACE  # MatchOnValue
+               | MATCH LBRACE condArm (COMMA? condArm)* RBRACE              # MatchOnCondition
+               ;
+
+valueArm       : UNDERSCORE ARROW expression                # ValueDefaultArm
+               | valuePattern ARROW expression              # ValuePatternArm
+               ;
+valuePattern   : listLiteral | literal ;
+
+condArm        : UNDERSCORE ARROW expression                # CondDefaultArm
+               | predicate ARROW expression                 # CondPredicateArm
+               ;
+
+literal        : STRING | INT | DECIMAL_LIT | TRUE | FALSE | NULL ;
+identifier     : IDENT | QUOTED_IDENT ;
+
+// =====================================================================
+//  Lexer -- keywords are case-insensitive, identifiers are resolved
+//  case-insensitively against the catalog.
+// =====================================================================
+
+ANALYSIS  : A N A L Y S I S ;
+LIST      : L I S T ;
+BY        : B Y ;
+FROM      : F R O M ;
+OVER      : O V E R ;
+SORT      : S O R T ;
+TOP       : T O P ;
+ASC       : A S C ;
+DESC      : D E S C ;
+MATCH     : M A T C H ;
+WHEN      : W H E N ;
+DISTINCT  : D I S T I N C T ;
+AND       : A N D ;
+OR        : O R ;
+NOT       : N O T ;
+IN        : I N ;
+IS        : I S ;
+LIKE      : L I K E ;
+NULL      : N U L L ;
+TRUE      : T R U E ;
+FALSE     : F A L S E ;
+
+ARROW     : '->' ;
+RANGE     : '..' ;
+NEQ       : '!=' | '<>' ;
+LTE       : '<=' ;
+GTE       : '>=' ;
+EQ        : '=' ;
+LT        : '<' ;
+GT        : '>' ;
+PLUS      : '+' ;
+MINUS     : '-' ;
+STAR      : '*' ;
+SLASH     : '/' ;
+PERCENT   : '%' ;
+COMMA     : ',' ;
+LPAREN    : '(' ;
+RPAREN    : ')' ;
+LBRACE    : '{' ;
+RBRACE    : '}' ;
+LBRACKET  : '[' ;
+RBRACKET  : ']' ;
+
+UNDERSCORE : '_' ;
+
+// A named query variable: the whole point of these is that they never
+// reach the generated SQL as text -- they become bind slots.
+PARAM        : '$' [a-zA-Z_] [a-zA-Z_0-9]* ;
+
+DECIMAL_LIT  : [0-9]+ '.' [0-9]+ ;
+INT          : [0-9]+ ;
+STRING       : '\'' ( ~'\'' | '\'\'' )* '\'' ;
+IDENT        : [a-zA-Z_] [a-zA-Z_0-9]* ;
+QUOTED_IDENT : '`' ~'`'+ '`' ;
+
+LINE_COMMENT  : '//' ~[\r\n]*    -> channel(HIDDEN) ;
+BLOCK_COMMENT : '/*' .*? '*/'    -> channel(HIDDEN) ;
+WS            : [ \t\r\n]+       -> channel(HIDDEN) ;
+
+fragment A : [aA] ; fragment B : [bB] ; fragment C : [cC] ; fragment D : [dD] ;
+fragment E : [eE] ; fragment F : [fF] ; fragment G : [gG] ; fragment H : [hH] ;
+fragment I : [iI] ; fragment J : [jJ] ; fragment K : [kK] ; fragment L : [lL] ;
+fragment M : [mM] ; fragment N : [nN] ; fragment O : [oO] ; fragment P : [pP] ;
+fragment Q : [qQ] ; fragment R : [rR] ; fragment S : [sS] ; fragment T : [tT] ;
+fragment U : [uU] ; fragment V : [vV] ; fragment W : [wW] ; fragment X : [xX] ;
+fragment Y : [yY] ; fragment Z : [zZ] ;
