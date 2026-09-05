@@ -114,9 +114,7 @@ public final class SqlServerGenerator {
         // Columns the measures read have to be carried through the derived table.
         Map<Catalog.Field, String> names = derivedColumnNames(q);
 
-        sql.append("SELECT TOP (");
-        value(q.limit());
-        sql.append(")\n");
+        selectKeyword(q);
 
         List<Tam.Output> outputs = q.outputs();
         for (int i = 0; i < outputs.size(); i++) {
@@ -241,9 +239,7 @@ public final class SqlServerGenerator {
     // ------------------------------------------------------------------
 
     private void selectClause(Tam.Query q) {
-        sql.append("SELECT TOP (");
-        value(q.limit());
-        sql.append(")\n");
+        selectKeyword(q);
 
         List<Tam.Output> outputs = q.outputs();
         for (int i = 0; i < outputs.size(); i++) {
@@ -253,6 +249,17 @@ public final class SqlServerGenerator {
             if (i < outputs.size() - 1) sql.append(",");
             sql.append("\n");
         }
+    }
+
+    /** TOP appears only when the query asked for one, so the SQL mirrors the TAQL. */
+    private void selectKeyword(Tam.Query q) {
+        sql.append("SELECT");
+        if (q.limit() != null) {
+            sql.append(" TOP (");
+            value(q.limit());
+            sql.append(")");
+        }
+        sql.append("\n");
     }
 
     private void fromClause(Tam.Query q) {

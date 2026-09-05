@@ -138,10 +138,15 @@ auto-parameterisation genuinely changes the SQL you would have written by hand.
 than zero. `count(...) when p` yields 0. Left as-is because it is what SQL means;
 wrap in `coalesce` if an API needs zeros.
 
-**Every query has a row cap.** An absent `top` becomes a compiler-supplied
-constant (`Resolver.Options.defaultRowLimit`, 1000). Note this applies to
-`analysis` too, where without a `top ... by` the cap truncates an unordered
-result — a guard rail, not a pagination story.
+**The statement mirrors the query.** `TOP` appears only when the TAQL says
+`top`, so reading the generated SQL against the source is a one-to-one exercise
+with nothing injected behind your back.
+
+That does mean a query without `top` returns everything it matches.
+`Resolver.Options.defaultRowLimit` applies a cap to such queries when set —
+it defaults to 0, meaning no cap. A REST deployment probably wants it on, with
+the caveat that on an `analysis` query with no `top ... by` a cap truncates an
+unordered result: a guard rail, not a pagination story.
 
 ## Not done
 
@@ -152,8 +157,9 @@ Deliberate omissions for a POC, roughly in the order I would add them:
 - **Authorisation.** The catalog decides which fields exist, but not which
   fields *this caller* may read. Row-level filters (e.g. force `ClientId` to the
   caller's own) belong as a mandatory predicate injected at lowering.
-- **Cost control beyond the row cap.** Nothing stops `count(distinct x)` over an
-  unfiltered table; a required-filter rule per entity would.
+- **Cost control.** The row cap is off by default and nothing stops
+  `count(distinct x)` over an unfiltered table; a required-filter rule per
+  entity, and a mandatory cap at the REST layer, would.
 - **Multi-entity.** `from` is wired through and the catalog is a map, but only
   one entity is defined and there is no cross-entity join planning.
 - **Caffeine** instead of the hand-rolled LRU, for per-entry stats and

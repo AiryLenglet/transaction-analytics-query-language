@@ -33,8 +33,16 @@ import java.util.Set;
  */
 public final class Resolver {
 
+    /**
+     * @param defaultRowLimit row cap applied to queries that state no 'top'.
+     *                        Zero -- the default -- means no cap, so the
+     *                        generated statement mirrors the TAQL and carries no
+     *                        TOP the query did not ask for. Setting it is a
+     *                        deployment choice: a REST endpoint that can return
+     *                        an unbounded result is an outage waiting to happen.
+     */
     public record Options(int defaultRowLimit) {
-        public static final Options DEFAULTS = new Options(1000);
+        public static final Options DEFAULTS = new Options(0);
     }
 
     private final Catalog catalog;
@@ -149,12 +157,13 @@ public final class Resolver {
                 List.of(), List.of(), projections, filter, sort, limit(f.top()));
     }
 
-    /**
-     * A REST endpoint with no row cap is an outage waiting to happen, so an
-     * absent 'top' becomes a compiler-supplied constant rather than no limit.
-     */
+    /** Null when the query states no 'top' and no cap is configured; the statement then has no TOP. */
     private Tam.Expr limit(Ast.Top top) {
-        if (top == null) return new Tam.Constant((long) options.defaultRowLimit(), TaqlType.INTEGER, new SqlType.Int());
+        if (top == null) {
+            return options.defaultRowLimit() > 0
+                    ? new Tam.Constant((long) options.defaultRowLimit(), TaqlType.INTEGER, new SqlType.Int())
+                    : null;
+        }
         return switch (top.count()) {
             case Ast.Lit l -> new Tam.LiteralRef(l.slot(), TaqlType.INTEGER, new SqlType.Int());
             case Ast.Param p -> variable(p, TaqlType.INTEGER, new SqlType.Int());

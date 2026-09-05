@@ -100,8 +100,9 @@ public final class Tam {
     /**
      * @param joins join names required by the resolved fields, in catalog order
      *              and already de-duplicated.
-     * @param limit row cap; never null -- the compiler injects a default so an
-     *              open-ended REST query cannot table-scan the database.
+     * @param limit row cap, or null when the query stated no 'top' and no
+     *              default cap is configured -- in which case the statement is
+     *              emitted without a TOP clause at all.
      */
     public record Query(Kind kind,
                         Catalog.Entity entity,

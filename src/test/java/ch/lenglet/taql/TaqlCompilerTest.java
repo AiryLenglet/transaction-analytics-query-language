@@ -4,6 +4,7 @@ import ch.lenglet.taql.catalog.Catalog;
 import ch.lenglet.taql.catalog.DemoCatalog;
 import ch.lenglet.taql.SqlType;
 import ch.lenglet.taql.plan.Plan;
+import ch.lenglet.taql.sem.Resolver;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -128,8 +129,21 @@ class TaqlCompilerTest {
         }
 
         @Test
-        void injectsARowCapWhenTopIsOmitted() {
+        void omitsTopEntirelyWhenTheQueryDoesNotAskForOne() {
             Plan plan = compiler.compileUncached("list { transactionId }");
+            assertAll(
+                    () -> assertFalse(plan.sql().contains("TOP"), plan.sql()),
+                    () -> assertTrue(plan.sql().startsWith("SELECT\n")),
+                    () -> assertTrue(plan.parameters().isEmpty()));
+        }
+
+        @Test
+        void appliesAConfiguredRowCapWhenOneIsSet() {
+            // Off by default so the SQL mirrors the TAQL; a deployment that does
+            // not want unbounded results opts in here.
+            TaqlCompiler capped = new TaqlCompiler(DemoCatalog.create(),
+                    new Resolver.Options(1000), 16, 16);
+            Plan plan = capped.compileUncached("list { transactionId }");
             assertTrue(plan.sql().startsWith("SELECT TOP (?)"));
             assertEquals(1000L, ((Plan.Constant) plan.parameters().getFirst()).value());
         }
@@ -170,8 +184,8 @@ class TaqlCompilerTest {
             List<Object> two = compiler.compile(source).bind(Map.of("clients", List.of("1", "3")));
             List<Object> five = compiler.compile(source).bind(
                     Map.of("clients", List.of("1", "2", "3", "4", "5")));
-            assertEquals("[\"1\",\"3\"]", two.get(1));
-            assertEquals("[\"1\",\"2\",\"3\",\"4\",\"5\"]", five.get(1));
+            assertEquals("[\"1\",\"3\"]", two.getFirst());
+            assertEquals("[\"1\",\"2\",\"3\",\"4\",\"5\"]", five.getFirst());
             assertEquals(two.size(), five.size(), "arity must not change the parameter count");
         }
 
@@ -179,14 +193,14 @@ class TaqlCompilerTest {
         void convertsLiteralsToTheColumnType() {
             List<Object> values = compiler.compile(
                     "list { transactionId } over { TransactionDate in '2010-01-01'..'2019-12-31' }").bind();
-            assertEquals(java.time.LocalDate.of(2010, 1, 1), values.get(1));
-            assertEquals(java.time.LocalDate.of(2019, 12, 31), values.get(2));
+            assertEquals(java.time.LocalDate.of(2010, 1, 1), values.get(0));
+            assertEquals(java.time.LocalDate.of(2019, 12, 31), values.get(1));
         }
 
         @Test
         void bindsAgainstTheColumnsPhysicalTypeNotAGenericOne() {
             Plan plan = compiler.compileUncached("list { transactionId } over { direction = 'C' }");
-            Plan.Auto slot = (Plan.Auto) plan.parameters().get(1);
+            Plan.Auto slot = (Plan.Auto) plan.parameters().getFirst();
             assertEquals(new SqlType.VarChar(1), slot.sqlType());
         }
 
@@ -218,8 +232,8 @@ class TaqlCompilerTest {
             var first = compiler.compile("list { transactionId } over { clientId = '1' }");
             var second = compiler.compile("list { transactionId } over { clientId = '999' }");
             assertSame(first.plan(), second.plan());
-            assertEquals("1", first.bind().get(1));
-            assertEquals("999", second.bind().get(1));
+            assertEquals("1", first.bind().getFirst());
+            assertEquals("999", second.bind().getFirst());
         }
 
         @Test
@@ -249,8 +263,8 @@ class TaqlCompilerTest {
             var first = compiler.compile(a);
             var second = compiler.compile(b);
             assertSame(first.plan(), second.plan());
-            assertEquals(List.of(1000L, "1", "2", "C", new java.math.BigDecimal("10")), first.bind());
-            assertEquals(List.of(1000L, "8", "9", "D", new java.math.BigDecimal("99")), second.bind());
+            assertEquals(List.of("1", "2", "C", new java.math.BigDecimal("10")), first.bind());
+            assertEquals(List.of("8", "9", "D", new java.math.BigDecimal("99")), second.bind());
         }
 
         @Test
@@ -295,7 +309,7 @@ class TaqlCompilerTest {
                             compiled.plan().sql().lines()
                                     .filter(l -> l.startsWith("WHERE"))
                                     .findFirst().orElseThrow().substring("WHERE ".length())),
-                    () -> assertEquals(payload, compiled.bind().get(1)));
+                    () -> assertEquals(payload, compiled.bind().getFirst()));
         }
 
         @Test
@@ -303,7 +317,7 @@ class TaqlCompilerTest {
             var compiled = compiler.compile("list { transactionId } over { clientId in $ids }");
             List<Object> values = compiled.bind(Map.of("ids", List.of("a\"; DROP TABLE x; --")));
             assertFalse(compiled.plan().sql().contains("DROP"));
-            assertEquals("[\"a\\\"; DROP TABLE x; --\"]", values.get(1));
+            assertEquals("[\"a\\\"; DROP TABLE x; --\"]", values.getFirst());
         }
 
         @Test

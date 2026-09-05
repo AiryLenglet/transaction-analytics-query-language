@@ -68,8 +68,8 @@ over {
 sort by TransactionDate desc, TransactionValue desc
 top 5
 -----------------
-// Flat query with no 'top': the compiler injects the configured row cap so a
-// REST caller cannot ask for the whole table.
+// Flat query with no 'top': the statement is emitted without a TOP clause,
+// because the TAQL did not ask for one.
 list {
     transactionId
     label = concat(upper(currency), ' ', transactionType)
