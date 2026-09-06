@@ -1,0 +1,569 @@
+openapi: 3.1.0
+
+info:
+  title: TAQL Analytics API
+  version: 0.1.0
+  summary: Compile and run TAQL queries against the transactions store.
+  description: |
+    Two ways in, because one request body cannot be both TAQL text and JSON
+    variable values:
+
+    * **Ad-hoc** — `POST /query` with a TAQL body. Self-contained queries only
+      (no `$variables`, since there is nowhere to put them), and the response is
+      a self-describing envelope.
+    * **Registered** — `POST /queries` compiles once and returns a contract;
+      `POST /queries/{id}/runs` supplies variables as JSON and runs it.
+
+    The registered form is the one to prefer. Compilation is the only step that
+    can reject a query, so doing it once turns an unpredictable request into a
+    known one: the contract carries a JSON Schema for the variables and for a
+    result row, which means the response stops being dynamic. A build step can
+    emit a narrowed OpenAPI document per registered query, replacing the generic
+    `ResultSet` below with concrete row properties.
+
+    ## Media types
+
+    `application/vnd.taql` is the TAQL source type. Bodies MUST be UTF-8;
+    the parameter is omitted from the media type because tooling handles it
+    inconsistently.
+
+    ## Errors
+
+    Every failure is `application/problem+json` (RFC 9457). Compilation failures
+    carry `diagnostics` with a line and column, and are always the caller's to
+    fix. Execution failures carry a `failure` category; note that
+    `SCHEMA_MISMATCH` is a **server** fault — the catalog claims a column the
+    database does not have — and is never reported as a 4xx.
+
+servers:
+  - url: https://analytics.example.com/v1
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: query
+    description: Compiling and running queries.
+  - name: catalog
+    description: What can be queried.
+
+paths:
+
+  /query:
+    post:
+      tags: [query]
+      operationId: runAdHocQuery
+      summary: Compile and run a query in one request
+      description: |
+        For exploration and one-off reports. The response shape depends on the
+        query, so it comes back as a `ResultSet` envelope carrying its own
+        column metadata.
+
+        Send `application/vnd.taql` for a self-contained query, or
+        `application/json` when the query uses `$variables`.
+      requestBody:
+        required: true
+        content:
+          application/vnd.taql:
+            schema:
+              type: string
+              maxLength: 16384
+            examples:
+              topCountries:
+                summary: Aggregation with a window function
+                value: |
+                  analysis by Country {
+                      total = sum(TransactionValue)
+                      pct   = share(total)
+                  }
+                  top 10 by total
+                  over { TransactionDate in '2010-01-01'..'2019-12-31' }
+              flat:
+                summary: Flat projection
+                value: |
+                  list { TransactionId, TransactionDate, TransactionValue }
+                  over { ClientId in ['1','3'] }
+                  sort by TransactionDate desc
+                  top 100
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdHocRequest'
+            examples:
+              withVariables:
+                value:
+                  query: |
+                    analysis by Country { total = sum(TransactionValue) }
+                    top $limit by total
+                    over { ClientId in $clients, TransactionDate in $from..$to }
+                  variables:
+                    clients: ['1', '3']
+                    from: '2010-01-01'
+                    to: '2019-12-31'
+                    limit: 10
+      responses:
+        '200':
+          $ref: '#/components/responses/ResultSetResponse'
+        '400': { $ref: '#/components/responses/CompileFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/QueryTooLarge' }
+        '422': { $ref: '#/components/responses/UnprocessableValues' }
+        '500': { $ref: '#/components/responses/ServerFault' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '504': { $ref: '#/components/responses/QueryTimedOut' }
+
+  /queries:
+    post:
+      tags: [query]
+      operationId: registerQuery
+      summary: Compile a query and return its contract
+      description: |
+        Compiles without touching the database: this endpoint validates syntax,
+        resolves every identifier against the catalog and type-checks the whole
+        query. A 201 means the query is runnable; a 400 means it never will be.
+
+        Registration is idempotent on the query text — submitting the same
+        source returns the same `id`.
+      requestBody:
+        required: true
+        content:
+          application/vnd.taql:
+            schema:
+              type: string
+              maxLength: 16384
+            examples:
+              parameterised:
+                value: |
+                  analysis by Country { total = sum(TransactionValue)  pct = share(total) }
+                  top $limit by total
+                  over { ClientId in $clients, TransactionDate in $from..$to }
+      responses:
+        '201':
+          description: Compiled. The body is the query's contract.
+          headers:
+            Location:
+              description: Canonical URL of the registered query.
+              schema: { type: string, format: uri-reference }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueryContract' }
+        '400': { $ref: '#/components/responses/CompileFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/QueryTooLarge' }
+        '500': { $ref: '#/components/responses/ServerFault' }
+
+  /queries/{id}:
+    parameters:
+      - $ref: '#/components/parameters/QueryId'
+    get:
+      tags: [query]
+      operationId: getQueryContract
+      summary: Retrieve a registered query's contract
+      description: |
+        Safe to cache: a registered query's source never changes, so the contract
+        is stable until the catalog changes underneath it.
+      responses:
+        '200':
+          description: The query's contract.
+          headers:
+            ETag:
+              description: Changes only if the catalog changes the query's types.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueryContract' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /queries/{id}/runs:
+    parameters:
+      - $ref: '#/components/parameters/QueryId'
+    post:
+      tags: [query]
+      operationId: runRegisteredQuery
+      summary: Run a registered query
+      description: |
+        The request body must satisfy the contract's `variables` schema, and the
+        response rows satisfy its `rowSchema`. Both are JSON Schema 2020-12, so a
+        client can validate against them directly.
+
+        Documented here as the generic `ResultSet`, because one static document
+        cannot describe every registered query. A generated per-query document
+        narrows this response to concrete properties.
+      requestBody:
+        required: true
+        description: Values for the query's `$variables`, keyed by name without the `$`.
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+            examples:
+              values:
+                value:
+                  clients: ['1', '3']
+                  from: '2010-01-01'
+                  to: '2019-12-31'
+                  limit: 10
+      responses:
+        '200':
+          $ref: '#/components/responses/ResultSetResponse'
+        '400':
+          description: |
+            A variable is missing, of the wrong type, or a value could not be
+            converted to the column's type.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/UnprocessableValues' }
+        '500': { $ref: '#/components/responses/ServerFault' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '504': { $ref: '#/components/responses/QueryTimedOut' }
+
+  /catalog:
+    get:
+      tags: [catalog]
+      operationId: getCatalog
+      summary: The queryable vocabulary
+      description: |
+        Every name a query may use. Nothing outside this list resolves, so this
+        is both the documentation for writing TAQL and the input a query builder
+        or autocomplete needs.
+      responses:
+        '200':
+          description: The entities and fields available to this caller.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Catalog' }
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        The token's identity also scopes the data: a mandatory predicate is
+        added during compilation and cannot be written around from TAQL.
+
+  parameters:
+    QueryId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_-]{1,64}$'
+
+  responses:
+
+    ResultSetResponse:
+      description: The result. Read `columns` to interpret `rows`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ResultSet' }
+        text/csv:
+          schema: { type: string }
+          examples:
+            csv:
+              value: |
+                Country,total,pct
+                CH,53230.25,0.770933
+                GB,7550.00,0.109346
+
+    CompileFailed:
+      description: |
+        The query is not valid. Always the caller's to fix, and always
+        reproducible — no retry will change the outcome.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/CompileProblem' }
+          examples:
+            unknownField:
+              value:
+                type: 'https://analytics.example.com/problems/compile-failed'
+                title: The query could not be compiled.
+                status: 400
+                diagnostics:
+                  - phase: resolution
+                    line: 1
+                    column: 13
+                    message: "unknown field 'Salary' on transactions"
+
+    UnprocessableValues:
+      description: |
+        The query is valid but the database rejected a value — arithmetic
+        overflow, divide by zero, or a conversion that could not be performed.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ExecutionProblem' }
+
+    Forbidden:
+      description: The caller may not read something the query touches.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ExecutionProblem' }
+
+    NotFound:
+      description: No such registered query.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+    QueryTooLarge:
+      description: The TAQL source exceeds the accepted size.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+    ServerFault:
+      description: |
+        A fault on this side. `SCHEMA_MISMATCH` lands here rather than in a 4xx:
+        it means the catalog describes a table or column the database does not
+        have, which is a deployment error, not a bad request.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ExecutionProblem' }
+          examples:
+            schemaMismatch:
+              value:
+                type: 'https://analytics.example.com/problems/execution-failed'
+                title: This query cannot be served against the current database schema.
+                status: 500
+                failure: SCHEMA_MISMATCH
+                retryable: false
+
+    Unavailable:
+      description: |
+        A transient conflict or a resource limit. The server has already retried;
+        this is what remains.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema: { type: integer, minimum: 1 }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ExecutionProblem' }
+
+    QueryTimedOut:
+      description: |
+        The query exceeded its time budget and was cancelled. Not retryable as
+        written — narrow the filter or the range.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ExecutionProblem' }
+
+  schemas:
+
+    AdHocRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          maxLength: 16384
+          description: TAQL source.
+        variables:
+          type: object
+          additionalProperties: true
+          description: Values for the query's `$variables`, keyed by name without the `$`.
+
+    ScalarType:
+      description: |
+        The type of a result column. Always a scalar — a list is only ever a
+        variable type, never a column type.
+
+        `null` appears when a projection is a bare literal `null`
+        (`list { x = null }`), so the column is known to hold nothing. Treat it
+        as "nullable, unknown".
+      type: string
+      enum: [string, integer, decimal, date, timestamp, boolean, 'null']
+
+    Column:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          description: The output name, as written in the query.
+        type:
+          $ref: '#/components/schemas/ScalarType'
+      examples:
+        - { name: total, type: decimal }
+
+    ResultSet:
+      description: |
+        A result whose shape is not known until the query is compiled. `columns`
+        is ordered and positionally aligned with each row in `rows`.
+      type: object
+      required: [columns, rows]
+      properties:
+        columns:
+          type: array
+          items: { $ref: '#/components/schemas/Column' }
+        rows:
+          type: array
+          description: |
+            Rows are arrays rather than objects: it preserves column order,
+            keeps the payload small, and a consumer of a dynamic result has to
+            read `columns` regardless.
+          items:
+            type: array
+            items:
+              oneOf:
+                - type: string
+                - type: number
+                - type: boolean
+                - type: 'null'
+        truncated:
+          type: boolean
+          description: |
+            True when a server-side row cap stopped the result early. Absent
+            means the result is complete.
+      examples:
+        - columns:
+            - { name: Country, type: string }
+            - { name: total, type: decimal }
+          rows:
+            - ['CH', '53230.25']
+            - ['GB', '7550.00']
+
+    QueryContract:
+      description: |
+        Everything a client needs to call a registered query, derived from the
+        compiled plan rather than written by hand.
+      type: object
+      required: [id, variables, columns, rowSchema]
+      properties:
+        id:
+          type: string
+        shapeKey:
+          type: string
+          description: |
+            Identity of the query's *structure*, independent of its constants.
+            Two queries differing only in literal values share one. Useful as an
+            aggregation key for latency and cost metrics.
+        variables:
+          type: object
+          description: |
+            JSON Schema (2020-12) for this query's variables object. Generated
+            from the plan, so it cannot drift from what the query needs.
+          examples:
+            - type: object
+              required: [clients, from, limit, to]
+              properties:
+                clients: { type: array, minItems: 1, items: { type: string } }
+                from: { type: string, format: date }
+                to: { type: string, format: date }
+                limit: { type: integer, format: int64 }
+        columns:
+          type: array
+          items: { $ref: '#/components/schemas/Column' }
+        rowSchema:
+          type: object
+          description: |
+            JSON Schema (2020-12) for one result row as an object. This is what a
+            generated per-query OpenAPI document uses in place of `ResultSet`.
+          examples:
+            - type: object
+              required: [Country, total, pct]
+              properties:
+                Country: { type: string }
+                total: { type: string, format: decimal }
+                pct: { type: string, format: decimal }
+
+    Catalog:
+      type: object
+      required: [entities]
+      properties:
+        entities:
+          type: array
+          items:
+            type: object
+            required: [name, fields]
+            properties:
+              name:
+                type: string
+                description: Use in a query's `from` clause. Omitting `from` selects the first.
+              fields:
+                type: array
+                items:
+                  type: object
+                  required: [name, type]
+                  properties:
+                    name:
+                      type: string
+                      description: Matched case-insensitively; each field has exactly one name.
+                    type:
+                      $ref: '#/components/schemas/ScalarType'
+      examples:
+        - entities:
+            - name: transactions
+              fields:
+                - { name: TransactionId, type: string }
+                - { name: TransactionValue, type: decimal }
+                - { name: TransactionDate, type: date }
+
+    Problem:
+      description: RFC 9457 problem details.
+      type: object
+      required: [title, status]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer, minimum: 100, maximum: 599 }
+        detail:
+          type: string
+          description: |
+            Safe to display. Never carries a database message: those quote
+            schema and row values, and are localised by the server.
+        instance: { type: string, format: uri-reference }
+        traceId:
+          type: string
+          description: Correlates with the server log holding the full detail.
+
+    CompileProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          required: [diagnostics]
+          properties:
+            diagnostics:
+              type: array
+              minItems: 1
+              description: Every error found, not just the first.
+              items:
+                type: object
+                required: [phase, line, column, message]
+                properties:
+                  phase:
+                    type: string
+                    enum: [syntax, resolution, type]
+                    description: |
+                      `syntax` — the text does not parse.
+                      `resolution` — a name is not in the catalog.
+                      `type` — the query parses and resolves but does not type-check.
+                  line: { type: integer, minimum: 1 }
+                  column: { type: integer, minimum: 1 }
+                  message: { type: string }
+
+    ExecutionProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          required: [failure, retryable]
+          properties:
+            failure:
+              type: string
+              enum:
+                - RETRYABLE
+                - RESOURCE
+                - TIMEOUT
+                - INVALID_DATA
+                - SCHEMA_MISMATCH
+                - PERMISSION
+                - UNKNOWN
+            retryable:
+              type: boolean
+              description: Whether the identical request might succeed if repeated.
