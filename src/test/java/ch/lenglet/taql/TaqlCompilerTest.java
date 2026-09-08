@@ -349,6 +349,59 @@ class TaqlCompilerTest {
 
     // ==================================================================
     @Nested
+    @DisplayName("limits")
+    class Limits {
+
+        @Test
+        void rejectsAnOversizedQueryBeforeParsingIt() {
+            String huge = "list { TransactionId } over { Country = '" + "a".repeat(9000) + "' }";
+            var rejected = assertThrows(TaqlException.class, () -> compiler.compile(huge));
+            assertEquals(Diagnostic.Phase.LIMIT, rejected.diagnostics().getFirst().phase());
+            assertTrue(rejected.getMessage().contains("the limit is 8192"), rejected.getMessage());
+        }
+
+        @Test
+        void rejectsAnExpressionThatNestsTooDeeply() {
+            // Every later pass walks this tree recursively, so a tree they could
+            // not survive must not be built. Before the bound, this was a
+            // StackOverflowError -- an Error, straight past every handler.
+            String deep = "list { x = " + "1+".repeat(4000) + "1 }";
+            var rejected = assertThrows(TaqlException.class, () -> compiler.compile(deep));
+            assertEquals(Diagnostic.Phase.LIMIT, rejected.diagnostics().getFirst().phase());
+            assertTrue(rejected.getMessage().contains("nests more than 256"), rejected.getMessage());
+        }
+
+        @Test
+        void rejectsDeeplyNestedPredicatesToo() {
+            String deep = "list { TransactionId } over { " + "not ".repeat(400) + "Country = 'CH' }";
+            var rejected = assertThrows(TaqlException.class, () -> compiler.compile(deep));
+            assertEquals(Diagnostic.Phase.LIMIT, rejected.diagnostics().getFirst().phase());
+        }
+
+        @Test
+        void rejectsAnIntegerLiteralTooLargeForALong() {
+            // The lexer accepts [0-9]+, which is wider than a long. This used to
+            // escape as NumberFormatException and become a 500.
+            for (String query : List.of(
+                    "list { TransactionId } over { TransactionValue > 99999999999999999999 }",
+                    "list { TransactionId } top 99999999999999999999")) {
+                var rejected = assertThrows(TaqlException.class, () -> compiler.compile(query), query);
+                assertTrue(rejected.getMessage().contains("is too large"), rejected.getMessage());
+            }
+        }
+
+        @Test
+        void breadthIsNotDepthSoAWideQueryStillCompiles() {
+            // 1000 list items nest one level, however long the text: the bound is
+            // on nesting, not on size of the query's answer.
+            String wide = "list { TransactionId } over { Country in ["
+                    + String.join(",", java.util.Collections.nCopies(1000, "'CH'")) + "] }";
+            assertEquals(1000, compiler.compile(wide).plan().parameters().size());
+        }
+    }
+
+    // ==================================================================
+    @Nested
     @DisplayName("plan cache")
     class Cache {
 

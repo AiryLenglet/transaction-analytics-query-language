@@ -253,6 +253,27 @@ What `TaqlExecutor` does with that:
 the database does not have. That is a deployment fault, not a caller fault — a
 500 and an alert, never a 400, and no retry will ever fix it.
 
+## Limits
+
+Bounds a deployment sets, none of them part of the language:
+
+| bound | default | where |
+|---|---|---|
+| query length | 8192 characters | `TaqlParserFacade.Limits` |
+| nesting depth | 256 levels | `TaqlParserFacade.Limits`, enforced as the AST is built |
+| rows returned | 10 000 | `TaqlExecutor.Options` |
+| statement timeout | 30 s | `TaqlExecutor.Options` |
+
+Exceeding one is a `limit` diagnostic, positioned like any other. The nesting
+bound is what protects the stack: the resolver, the printer and the SQL
+generator all walk the tree recursively, so a tree they could not survive is
+never built. The row ceiling fails the query rather than truncating it — an
+analytical answer quietly missing rows is worse than an error saying so.
+
+Parsing runs SLL-first with an LL fallback for diagnostics. The left-recursive
+`expression` rule is quadratic under full LL — 3200 terms took 43 seconds — and
+45 ms under SLL.
+
 ## Not done
 
 Deliberate omissions for a POC, roughly in the order I would add them:
@@ -268,9 +289,10 @@ Deliberate omissions for a POC, roughly in the order I would add them:
   caller's own) belong as a mandatory predicate injected at lowering.
 - **Circuit breaking.** Retries are bounded per request but nothing sheds load
   when the database is failing for everyone at once.
-- **Cost control.** The row cap is off by default and nothing stops
-  `count(distinct x)` over an unfiltered table; a required-filter rule per
-  entity, and a mandatory cap at the REST layer, would.
+- **Cost control.** `TaqlExecutor` caps rows and every statement is bounded by
+  a timeout, but nothing stops `count(distinct x)` over an unfiltered table
+  before it runs; a required-filter rule per entity, and a cost estimate from
+  the plan, would.
 - **Multi-entity.** `from` is wired through and the catalog is a map, but only
   one entity is defined and there is no cross-entity join planning.
 - **Caffeine** instead of the hand-rolled LRU, for per-entry stats and

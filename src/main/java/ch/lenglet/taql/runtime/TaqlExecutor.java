@@ -1,6 +1,8 @@
 package ch.lenglet.taql.runtime;
 
+import ch.lenglet.taql.Diagnostic;
 import ch.lenglet.taql.TaqlCompiler;
+import ch.lenglet.taql.TaqlException;
 import ch.lenglet.taql.plan.Plan;
 
 import javax.sql.DataSource;
@@ -45,13 +47,26 @@ public final class TaqlExecutor {
      *                            almost never what a service wants.
      * @param maxAttempts         total attempts for a retryable failure.
      * @param retryBackoffMillis  base delay, doubled per attempt.
+     * @param maxRows             hard ceiling on rows returned. A query that
+     *                            would exceed it fails rather than returning a
+     *                            silently truncated answer: an analytical result
+     *                            missing rows nobody mentioned is worse than an
+     *                            error saying so. Not a default that can be set
+     *                            to "unlimited" -- that is the setting that
+     *                            takes the process down.
+     * @param fetchSize           JDBC fetch size, so the driver streams instead
+     *                            of buffering the whole result before the first
+     *                            row is read.
      */
-    public record Options(int queryTimeoutSeconds, int maxAttempts, long retryBackoffMillis) {
+    public record Options(int queryTimeoutSeconds, int maxAttempts, long retryBackoffMillis,
+                          int maxRows, int fetchSize) {
 
-        public static final Options DEFAULTS = new Options(30, 3, 50);
+        public static final Options DEFAULTS = new Options(30, 3, 50, 10_000, 1_000);
 
         public Options {
             if (maxAttempts < 1) throw new IllegalArgumentException("maxAttempts must be at least 1");
+            if (maxRows < 1) throw new IllegalArgumentException("maxRows must be at least 1");
+            if (fetchSize < 1) throw new IllegalArgumentException("fetchSize must be at least 1");
         }
     }
 
@@ -106,11 +121,20 @@ public final class TaqlExecutor {
     private Rows execute(Plan plan, List<Object> values) throws SQLException {
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(plan.sql())) {
+            // Every TAQL query is a SELECT; saying so lets the driver and any
+            // proxy in front of it route and optimise accordingly.
+            connection.setReadOnly(true);
             statement.setQueryTimeout(options.queryTimeoutSeconds());
+            statement.setFetchSize(options.fetchSize());
+            // One row past the ceiling: enough to know it was exceeded, and it
+            // stops the server sending the rest.
+            statement.setMaxRows(options.maxRows() + 1);
             Binder.apply(statement, plan, values);
+
             try (ResultSet rs = statement.executeQuery()) {
                 List<Map<String, Object>> rows = new ArrayList<>();
                 while (rs.next()) {
+                    if (rows.size() == options.maxRows()) throw tooManyRows();
                     Map<String, Object> row = new LinkedHashMap<>();
                     for (Plan.Column column : plan.columns()) {
                         row.put(column.name(), rs.getObject(column.name()));
@@ -120,6 +144,17 @@ public final class TaqlExecutor {
                 return new Rows(plan.columns(), rows);
             }
         }
+    }
+
+    /**
+     * The caller could have written the query differently -- narrow the filter,
+     * add a 'top', group it -- so this is a 400 with an actionable message, not
+     * a server fault.
+     */
+    private TaqlException tooManyRows() {
+        return new TaqlException(new Diagnostic(Diagnostic.Phase.LIMIT, 0, 0,
+                "this query returns more than " + options.maxRows()
+                        + " rows; add 'top N', group it, or narrow the filter"));
     }
 
     private void backoff(int attempt, SQLException cause) {

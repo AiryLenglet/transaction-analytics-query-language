@@ -67,7 +67,7 @@ paths:
           application/vnd.taql:
             schema:
               type: string
-              maxLength: 16384
+              maxLength: 8192
             examples:
               topCountries:
                 summary: Aggregation with a window function
@@ -129,7 +129,7 @@ paths:
           application/vnd.taql:
             schema:
               type: string
-              maxLength: 16384
+              maxLength: 8192
             examples:
               parameterised:
                 value: |
@@ -362,7 +362,7 @@ components:
       properties:
         query:
           type: string
-          maxLength: 16384
+          maxLength: 8192
           description: TAQL source.
         variables:
           type: object
@@ -539,11 +539,15 @@ components:
                 properties:
                   phase:
                     type: string
-                    enum: [syntax, resolution, type]
+                    enum: [syntax, resolution, type, limit]
                     description: |
                       `syntax` — the text does not parse.
                       `resolution` — a name is not in the catalog.
                       `type` — the query parses and resolves but does not type-check.
+                      `limit` — the query is within the language but outside a
+                      configured bound: too long, nested too deeply, or its
+                      result set exceeds the server's row ceiling. The last of
+                      those is only known once the query runs.
                   line: { type: integer, minimum: 1 }
                   column: { type: integer, minimum: 1 }
                   message: { type: string }

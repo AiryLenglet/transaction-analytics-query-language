@@ -23,8 +23,21 @@ public final class AstBuilder {
 
     private final List<Object> literals = new ArrayList<>();
 
-    public static Ast.Query build(TaqlParser.QueryContext tree) {
-        AstBuilder builder = new AstBuilder();
+    /**
+     * Nesting budget. Every later pass -- {@link AstPrinter}, the resolver, the
+     * SQL generator -- walks this tree by recursion, so a tree they could not
+     * survive must never be built in the first place. Checked in {@link #expr}
+     * and {@link #pred}, which is where all nesting goes through.
+     */
+    private final int maxDepth;
+    private int depth;
+
+    private AstBuilder(int maxDepth) {
+        this.maxDepth = maxDepth;
+    }
+
+    public static Ast.Query build(TaqlParser.QueryContext tree, int maxNestingDepth) {
+        AstBuilder builder = new AstBuilder(maxNestingDepth);
         Ast.Stmt stmt = builder.statement(tree.statement());
         return new Ast.Query(stmt, List.copyOf(builder.literals), AstPrinter.canonical(stmt));
     }
@@ -193,7 +206,7 @@ public final class AstBuilder {
         TaqlParser.TopClauseContext t = clauses.top.topClause();
         Ast.Expr count = t.countExpr().PARAM() != null
                 ? new Ast.Param(paramName(t.countExpr().PARAM()), pos(t))
-                : lit(Long.parseLong(t.countExpr().INT().getText()), Ast.LitKind.INTEGER, pos(t));
+                : lit(integer(t.countExpr().INT(), pos(t)), Ast.LitKind.INTEGER, pos(t));
         return new Ast.Top(count, t.identifier() != null ? name(t.identifier()) : null,
                 within(t.withinClause()), pos(t));
     }
@@ -203,7 +216,12 @@ public final class AstBuilder {
     // ------------------------------------------------------------------
 
     private Ast.Pred pred(TaqlParser.PredicateContext ctx) {
-        return or(ctx.orPredicate());
+        if (++depth > maxDepth) throw tooDeep(ctx);
+        try {
+            return or(ctx.orPredicate());
+        } finally {
+            depth--;
+        }
     }
 
     private Ast.Pred or(TaqlParser.OrPredicateContext ctx) {
@@ -219,6 +237,17 @@ public final class AstBuilder {
     }
 
     private Ast.Pred unary(TaqlParser.UnaryPredicateContext ctx) {
+        // 'not' recurses here rather than through pred(), so it is counted here
+        // too -- otherwise its only bound would be maxSourceLength by accident.
+        if (++depth > maxDepth) throw tooDeep(ctx);
+        try {
+            return unaryPredicate(ctx);
+        } finally {
+            depth--;
+        }
+    }
+
+    private Ast.Pred unaryPredicate(TaqlParser.UnaryPredicateContext ctx) {
         return switch (ctx) {
             case TaqlParser.NotPredicateContext n -> new Ast.Not(unary(n.unaryPredicate()), pos(n));
             case TaqlParser.ParenPredicateContext p -> pred(p.predicate());
@@ -267,6 +296,15 @@ public final class AstBuilder {
     // ------------------------------------------------------------------
 
     private Ast.Expr expr(TaqlParser.ExpressionContext ctx) {
+        if (++depth > maxDepth) throw tooDeep(ctx);
+        try {
+            return expression(ctx);
+        } finally {
+            depth--;
+        }
+    }
+
+    private Ast.Expr expression(TaqlParser.ExpressionContext ctx) {
         return switch (ctx) {
             case TaqlParser.ParenExprContext c -> expr(c.expression());
             case TaqlParser.UnaryExprContext c ->
@@ -342,7 +380,7 @@ public final class AstBuilder {
         if (ctx.NULL() != null) return new Ast.Lit(-1, Ast.LitKind.NULL, pos);
         if (ctx.TRUE() != null) return lit(Boolean.TRUE, Ast.LitKind.BOOLEAN, pos);
         if (ctx.FALSE() != null) return lit(Boolean.FALSE, Ast.LitKind.BOOLEAN, pos);
-        if (ctx.INT() != null) return lit(Long.parseLong(ctx.INT().getText()), Ast.LitKind.INTEGER, pos);
+        if (ctx.INT() != null) return lit(integer(ctx.INT(), pos), Ast.LitKind.INTEGER, pos);
         if (ctx.DECIMAL_LIT() != null) return lit(new BigDecimal(ctx.DECIMAL_LIT().getText()), Ast.LitKind.DECIMAL, pos);
         return lit(unquote(ctx.STRING().getText()), Ast.LitKind.STRING, pos);
     }
@@ -350,6 +388,21 @@ public final class AstBuilder {
     private Ast.Lit lit(Object value, Ast.LitKind kind, Ast.Pos pos) {
         literals.add(value);
         return new Ast.Lit(literals.size() - 1, kind, pos);
+    }
+
+    /**
+     * The lexer accepts {@code [0-9]+}, which is wider than a {@code long}. An
+     * over-large constant is something the user typed, so it owes them a
+     * positioned diagnostic -- {@code Long.parseLong} would throw
+     * NumberFormatException straight past every handler and become a 500.
+     */
+    private Long integer(TerminalNode token, Ast.Pos pos) {
+        try {
+            return Long.parseLong(token.getText());
+        } catch (NumberFormatException tooBig) {
+            throw new TaqlException(new Diagnostic(Diagnostic.Phase.TYPE, pos.line(), pos.column(),
+                    "'" + token.getText() + "' is too large; whole numbers run to " + Long.MAX_VALUE));
+        }
     }
 
     private static String unquote(String raw) {
@@ -399,6 +452,12 @@ public final class AstBuilder {
     private static Ast.Pos pos(ParserRuleContext ctx) {
         Token t = ctx.getStart();
         return new Ast.Pos(t.getLine(), t.getCharPositionInLine() + 1);
+    }
+
+    private TaqlException tooDeep(ParserRuleContext ctx) {
+        Ast.Pos p = pos(ctx);
+        return new TaqlException(new Diagnostic(Diagnostic.Phase.LIMIT, p.line(), p.column(),
+                "this query nests more than " + maxDepth + " levels deep"));
     }
 
     private static TaqlException error(ParserRuleContext ctx, String message) {
