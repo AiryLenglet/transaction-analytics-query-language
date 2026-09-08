@@ -714,6 +714,17 @@ class TaqlCompilerTest {
         }
 
         @Test
+        void everySyntaxErrorIsReportedNotJustTheFirst() {
+            // Parsing is SLL-first for speed and falls back to LL on failure;
+            // the fallback is what collects diagnostics, so this guards the
+            // fallback actually running rather than the bail escaping.
+            TaqlException e = assertThrows(TaqlException.class, () -> compiler.compileUncached(
+                    "list { TransactionId } over { Country = , Currency = }"));
+            assertEquals(2, e.diagnostics().size(), e.getMessage());
+            assertTrue(e.diagnostics().stream().allMatch(d -> d.phase() == Diagnostic.Phase.SYNTAX));
+        }
+
+        @Test
         void typeErrorsExplainTheMismatch() {
             TaqlException e = assertThrows(TaqlException.class,
                     () -> compiler.compileUncached("analysis by country { bad = sum(currency) }"));
