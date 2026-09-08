@@ -5,7 +5,7 @@ grammar Taql;
 //
 //  Two statement shapes share one filter / expression language:
 //
-//    analysis by <keys> { <measures> } top N by <m> over { <filters> }
+//    analysis by <keys> { <measures> } over { <filters> } top N by <m>
 //    list { <projections> } over { <filters> } sort by <k> top N
 // =====================================================================
 
@@ -19,9 +19,10 @@ analysisStatement : ANALYSIS BY groupKeyList measureBlock queryClause* ;
 
 flatStatement     : LIST projectionBlock queryClause* ;
 
-// Trailing clauses are order-insensitive; duplicates are rejected by the
-// AST builder so the user gets a semantic error with a position rather
-// than an opaque parse failure.
+// Written 'from ... over ... sort by ... top'. The grammar stays permissive
+// and the AST builder enforces both the order and the absence of duplicates,
+// so a query written the wrong way round gets a semantic error naming the
+// clause and the order, rather than an opaque parse failure on a token.
 queryClause    : fromClause
                | overClause
                | sortClause

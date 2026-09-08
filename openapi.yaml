@@ -76,8 +76,8 @@ paths:
                       total = sum(TransactionValue)
                       pct   = share(total)
                   }
-                  top 10 by total
                   over { TransactionDate in '2010-01-01'..'2019-12-31' }
+                  top 10 by total
               flat:
                 summary: Flat projection
                 value: |
@@ -93,8 +93,8 @@ paths:
                 value:
                   query: |
                     analysis by Country { total = sum(TransactionValue) }
-                    top $limit by total
                     over { ClientId in $clients, TransactionDate in $from..$to }
+                    top $limit by total
                   variables:
                     clients: ['1', '3']
                     from: '2010-01-01'
@@ -134,8 +134,8 @@ paths:
               parameterised:
                 value: |
                   analysis by Country { total = sum(TransactionValue)  pct = share(total) }
-                  top $limit by total
                   over { ClientId in $clients, TransactionDate in $from..$to }
+                  top $limit by total
       responses:
         '201':
           description: Compiled. The body is the query's contract.

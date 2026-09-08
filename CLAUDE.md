@@ -11,7 +11,7 @@ TAQL — a query DSL for REST endpoints that compiles to **parameterised T-SQL**
 `mvn` is **not on PATH** in this environment and there is no wrapper committed. The only Maven present is IntelliJ's bundled copy:
 
 ```
-alias mvn='/Applications/IntelliJ IDEA CE.app/Contents/plugins/maven/lib/maven3/bin/mvn'
+alias mvn='/Applications/IntelliJ IDEA.app/Contents/plugins/maven/lib/maven3/bin/mvn'
 ```
 
 ```bash
@@ -58,6 +58,12 @@ text → TaqlParserFacade (ANTLR)  → parse tree
 The shape key is `AstPrinter.canonical(stmt)` — a value-independent rendering of the literal-free AST, computed **before** name resolution.
 
 **Consequence for any change you make:** if a syntactic feature changes the generated SQL, `AstPrinter` must render it, or two queries needing different SQL will collide on one cached plan. Inline list *arity* is in the key for exactly this reason (`IN (?, ?)` vs `IN (?, ?, ?)`); a `$variable` list is not, because it lowers to a single `OPENJSON` parameter of unknown arity. `TaqlCompilerTest$Cache` and `theWindowSpecIsPartOfTheShapeKey` guard this — add a case there when you add syntax.
+
+**Second consequence, and the one that bites hardest:** `Plan.Auto` slots index the literal table of the query *currently running*, so two texts sharing a key must number their literals identically. Before this was fixed, `list {...} top 5 over { v > 500 }` silently executed as `TOP 500 ... > 5`.
+
+Two things now prevent it. **Clause order is fixed** — `from → over → sort by → top`, enforced in `AstBuilder.clauses()` rather than the grammar so the error names the clause and the shape instead of being an opaque parse failure; the order is analytical (`from`/`over` are one concern, the population; the rest acts on it). And `AstBuilder` still *builds* clauses in that canonical order rather than as-written, since building is what allocates slots — so relaxing the rule later cannot silently reintroduce the bug.
+
+Because that is an agreement between two files, the key renders the slot index too (`#0S`, not `#S`). If the walks ever drift, the keys differ and the queries compile separate plans — a redundant plan, never a query bound to another query's values. `clausesMustBeWrittenInTheCanonicalOrder` and `theCanonicalOrderNumbersLiteralsInTheOrderThePlanBindsThem` cover both halves: give a new clause a `rank()` and keep them passing.
 
 The key is computed before resolution, which is also why `Catalog.Field` allows exactly **one spelling per field** (case-insensitive, no aliases): alternate names would compile separate plans for identical SQL.
 

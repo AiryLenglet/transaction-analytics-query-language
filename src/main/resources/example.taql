@@ -18,11 +18,11 @@ analysis by country {
     incomingAmount = sum(TransactionValue) when Direction = 'C'
     incomingCount = count() when Direction = 'C'
 }
-top 10 by incomingAmount
 over {
     ClientId in ['1', '3']
     TransactionDate in '2010-01-01'..'2019-12-31'
 }
+top 10 by incomingAmount
 -----------------
 // Same shape as the query above, different constants: this reuses the
 // cached plan and only rebinds the parameters.
@@ -30,11 +30,11 @@ analysis by country {
     incomingAmount = sum(TransactionValue) when Direction = 'C'
     incomingCount = count() when Direction = 'C'
 }
-top 10 by incomingAmount
 over {
     ClientId in ['2', '4']
     TransactionDate in '2015-01-01'..'2021-12-31'
 }
+top 10 by incomingAmount
 -----------------
 // Explicit variables. The plan advertises what it needs ($clients: list<string>,
 // $from/$to: date) and the caller supplies them per request, so this query text
@@ -44,12 +44,12 @@ analysis by country, year = year(TransactionDate) {
     largest = max(TransactionValue)
     distinctCounterparties = count(distinct counterpartyId)
 }
-top $limit by total
 over {
     clientId in $clients
     TransactionDate in $from..$to
     TransactionValue > 500
 }
+top $limit by total
 -----------------
 // Flat query: same filter and expression language, no grouping.
 list {

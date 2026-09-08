@@ -20,8 +20,16 @@ and print its SQL and bindings. Start `./runMsSqlServer.sh` first and it also ex
 ### Aggregation
 
 ```
-analysis by <keys> { <measures> } [top N by <measure>] [over { <filters> }]
+analysis by <keys> { <measures> } [over { <filters> }] [top N by <measure>]
 ```
+
+Clauses are written in that order, and any other order is a compile error
+naming the clause and the shape. `from` and `over` are one concern — they say
+which population is being analysed — so nothing comes between them, and what
+follows describes what the query does to that population: `top 10 by revenue`
+means nothing until the rows it ranks are known. One spelling per query also
+means one literal numbering, which is what lets a cached plan bind another
+query's values safely (see *Plan caching*).
 
 A key is `alias = <expr>` or a bare field. A measure is
 `alias = <agg>(<expr>) [when <predicate>]`; `when` compiles to a conditional
@@ -51,6 +59,7 @@ analysis by Country, CounterpartyName {
 }
 top 2 by total within Country
 ```
+
 
 - `share(m)` — `m` as a fraction of the partition total. Guarded with `NULLIF`,
   so a zero denominator yields NULL rather than SQL Server error 8134.

@@ -425,6 +425,54 @@ class TaqlCompilerTest {
             assertEquals(missesBefore, compiler.textCache().misses());
             assertEquals(1, compiler.textCache().hits());
         }
+
+        @Test
+        void clausesMustBeWrittenInTheCanonicalOrder() {
+            // One way to write a query, so there is one slot numbering. 'from' and
+            // 'over' name the population; 'sort by' and 'top' present it.
+            var wrong = assertThrows(TaqlException.class, () -> compiler.compile(
+                    "list { TransactionId } top 5 over { TransactionValue > 500 }"));
+            assertTrue(wrong.getMessage().contains("'over' must come before 'top'"), wrong.getMessage());
+            assertTrue(wrong.getMessage().contains("sort by"), wrong.getMessage());
+
+            var analysis = assertThrows(TaqlException.class, () -> compiler.compile(
+                    "analysis by Country { total = sum(TransactionValue) }"
+                            + " top 3 by total over { TransactionValue > 500 }"));
+            assertTrue(analysis.getMessage().contains("'over' must come before 'top'"), analysis.getMessage());
+
+            var sorted = assertThrows(TaqlException.class, () -> compiler.compile(
+                    "list { TransactionId } top 5 sort by TransactionId"));
+            assertTrue(sorted.getMessage().contains("'sort by' must come before 'top'"), sorted.getMessage());
+        }
+
+        @Test
+        void theCanonicalOrderNumbersLiteralsInTheOrderThePlanBindsThem() {
+            // Plan.Auto indexes the *calling* query's literal table, so slot order
+            // has to be canonical. It is, because only one order compiles -- but
+            // AstBuilder still builds canonically rather than as-written, so
+            // relaxing the rule cannot silently reintroduce a mis-binding.
+            var compiled = compiler.compile(
+                    "list { TransactionId } over { TransactionValue > 500 } sort by TransactionId top 5");
+            // TOP is emitted before WHERE, so that is the parameter order.
+            assertEquals(List.of(5L, new java.math.BigDecimal("500")), compiled.bind());
+
+            var other = compiler.compile(
+                    "list { TransactionId } over { TransactionValue > 20 } sort by TransactionId top 7");
+            assertSame(compiled.plan(), other.plan());
+            assertEquals(List.of(7L, new java.math.BigDecimal("20")), other.bind());
+        }
+
+        @Test
+        void theShapeKeyCarriesTheSlotSoAnyNumberingDriftCostsAPlanNotCorrectness() {
+            // Rendering the slot index makes the key self-checking: if AstBuilder
+            // and AstPrinter ever disagreed on order, the keys would differ and
+            // the queries would compile separate plans instead of one binding the
+            // other's values.
+            String key = compiler.compile(
+                    "list { TransactionId } over { TransactionValue > 500 } top 5").plan().shapeKey();
+            assertTrue(key.contains("#0"), key);
+            assertTrue(key.contains("#1"), key);
+        }
     }
 
     // ==================================================================

@@ -11,6 +11,19 @@ import java.util.StringJoiner;
  * order and the actual constants all wash out, while anything that changes the
  * generated SQL -- field names, operators, list arity, variable names -- is
  * preserved.
+ *
+ * <h2>Why the slot index is in the key</h2>
+ * A cached plan's {@link ch.lenglet.taql.plan.Plan.Auto} slots index into the
+ * literal table of whichever query is <em>currently running</em>, so two texts
+ * may share a plan only if they number their literals identically. That holds
+ * because {@link AstBuilder} allocates slots in this same canonical order --
+ * which is an agreement between two files, and agreements drift.
+ *
+ * Rendering the slot index makes the key <em>self-checking</em>: if the two
+ * walks ever disagree, the keys differ and the queries simply compile separate
+ * plans. The failure mode is a redundant plan, never a query bound to another
+ * query's values. It costs nothing while the walks agree, because then equal
+ * shapes already imply equal numbering.
  */
 final class AstPrinter {
 
@@ -34,8 +47,8 @@ final class AstPrinter {
                             + window(m.within(), m.ordered()));
                 }
                 sb.append(measures);
-                sb.append("|top=").append(top(a.top()));
                 sb.append("|where=").append(a.filter() == null ? "-" : pred(a.filter()));
+                sb.append("|top=").append(top(a.top()));
             }
             case Ast.Flat f -> {
                 sb.append("list|from=").append(f.entity() == null ? "*" : f.entity());
@@ -71,8 +84,9 @@ final class AstPrinter {
     private static String expr(Ast.Expr e) {
         return switch (e) {
             case Ast.FieldRef f -> f.name();
-            // The *kind* matters (it drives literal typing) but the value never does.
-            case Ast.Lit l -> "#" + l.kind().name().charAt(0);
+            // The *kind* matters (it drives literal typing) and so does the slot
+            // (it is what Plan.Auto indexes with); the value never does.
+            case Ast.Lit l -> "#" + l.slot() + l.kind().name().charAt(0);
             case Ast.Param p -> "$" + p.name();
             case Ast.Unary u -> "(" + u.op() + expr(u.operand()) + ")";
             case Ast.Binary b -> "(" + expr(b.left()) + b.op() + expr(b.right()) + ")";

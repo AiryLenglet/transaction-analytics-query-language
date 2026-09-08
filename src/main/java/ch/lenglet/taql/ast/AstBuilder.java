@@ -59,7 +59,11 @@ public final class AstBuilder {
                     within(m.withinClause()), ordering(m.orderedClause()), pos(m)));
         }
 
-        return new Ast.Analysis(clauses.entity, groups, measures, clauses.filter, clauses.top, pos(ctx));
+        // Canonical order -- see the note on Clauses.
+        Ast.Pred filter = filter(clauses);
+        Ast.Top top = top(clauses);
+
+        return new Ast.Analysis(clauses.entity, groups, measures, filter, top, pos(ctx));
     }
 
     private Ast.Stmt flat(TaqlParser.FlatStatementContext ctx) {
@@ -72,53 +76,126 @@ public final class AstBuilder {
             projections.add(new Ast.Projection(alias, expr, pos(p)));
         }
 
-        return new Ast.Flat(clauses.entity, projections, clauses.filter, clauses.sort, clauses.top, pos(ctx));
+        // Canonical order -- see the note on Clauses.
+        Ast.Pred filter = filter(clauses);
+        List<Ast.SortItem> sort = sort(clauses);
+        Ast.Top top = top(clauses);
+
+        return new Ast.Flat(clauses.entity, projections, filter, sort, top, pos(ctx));
     }
 
     // ------------------------------------------------------------------
     // Trailing clauses (order-insensitive, duplicates rejected here)
     // ------------------------------------------------------------------
 
+    /**
+     * The trailing clauses a statement carries, as unbuilt parse contexts.
+     *
+     * <h2>One order, and it is analytical</h2>
+     * Clauses must be written {@code from ... over ... sort by ... top}, and
+     * anything else is a positioned error. {@code from} and {@code over} are the
+     * same concern -- they name the population being analysed -- so nothing may
+     * come between them; what follows is what the query does <em>to</em> that
+     * population. {@code top 10 by revenue} has no meaning until the rows it
+     * ranks are known, so the scope is stated first and the query reads the way
+     * the question is asked: measure this, over that population, show the top N.
+     *
+     * <h2>Why they are collected rather than built</h2>
+     * Building is what allocates literal slots, and <b>slot order has to be
+     * canonical</b>: {@link ch.lenglet.taql.plan.Plan.Auto} indexes the literal
+     * table of whichever query is running, so two texts sharing a cached plan
+     * must number their literals identically. Ordering is enforced above, which
+     * makes that hold anyway -- collecting here and building in
+     * {@link #analysis} / {@link #flat} keeps it true by construction rather
+     * than by coincidence, so relaxing the rule later cannot silently reintroduce
+     * a query bound to another query's values.
+     */
     private static final class Clauses {
         String entity;
-        Ast.Pred filter;
-        Ast.Top top;
-        List<Ast.SortItem> sort = List.of();
+        TaqlParser.QueryClauseContext over;
+        TaqlParser.QueryClauseContext sort;
+        TaqlParser.QueryClauseContext top;
     }
 
     private Clauses clauses(List<TaqlParser.QueryClauseContext> list, boolean sortAllowed) {
         Clauses out = new Clauses();
+        int previousRank = -1;
+        String previous = null;
         for (TaqlParser.QueryClauseContext c : list) {
+            int rank = rank(c);
+            if (rank < previousRank) {
+                throw error(c, "'" + clauseName(c) + "' must come before '" + previous
+                        + "'; a query reads " + shape(sortAllowed));
+            }
+            previousRank = rank;
+            previous = clauseName(c);
+
             if (c.fromClause() != null) {
                 if (out.entity != null) throw error(c, "duplicate 'from' clause");
                 out.entity = name(c.fromClause().identifier());
             } else if (c.overClause() != null) {
-                if (out.filter != null) throw error(c, "duplicate 'over' clause");
-                List<Ast.Pred> parts = new ArrayList<>();
-                for (TaqlParser.PredicateContext p : c.overClause().predicate()) parts.add(pred(p));
-                // Filters written on separate lines are implicitly ANDed.
-                out.filter = parts.isEmpty() ? null
-                        : parts.size() == 1 ? parts.getFirst()
-                        : new Ast.And(parts, pos(c));
+                if (out.over != null) throw error(c, "duplicate 'over' clause");
+                out.over = c;
             } else if (c.topClause() != null) {
                 if (out.top != null) throw error(c, "duplicate 'top' clause");
-                TaqlParser.TopClauseContext t = c.topClause();
-                Ast.Expr count = t.countExpr().PARAM() != null
-                        ? new Ast.Param(paramName(t.countExpr().PARAM()), pos(t))
-                        : lit(Long.parseLong(t.countExpr().INT().getText()), Ast.LitKind.INTEGER, pos(t));
-                out.top = new Ast.Top(count, t.identifier() != null ? name(t.identifier()) : null,
-                        within(t.withinClause()), pos(t));
+                out.top = c;
             } else if (c.sortClause() != null) {
                 if (!sortAllowed) throw error(c, "'sort by' is not valid on an analysis query; use 'top N by <measure>'");
-                if (!out.sort.isEmpty()) throw error(c, "duplicate 'sort by' clause");
-                List<Ast.SortItem> items = new ArrayList<>();
-                for (TaqlParser.SortItemContext s : c.sortClause().sortItem()) {
-                    items.add(new Ast.SortItem(expr(s.expression()), s.DESC() != null, pos(s)));
-                }
-                out.sort = items;
+                if (out.sort != null) throw error(c, "duplicate 'sort by' clause");
+                out.sort = c;
             }
         }
         return out;
+    }
+
+    /** Position in the canonical order; see {@link Clauses}. */
+    private static int rank(TaqlParser.QueryClauseContext c) {
+        if (c.fromClause() != null) return 0;
+        if (c.overClause() != null) return 1;
+        if (c.sortClause() != null) return 2;
+        return 3;
+    }
+
+    private static String clauseName(TaqlParser.QueryClauseContext c) {
+        if (c.fromClause() != null) return "from";
+        if (c.overClause() != null) return "over";
+        if (c.sortClause() != null) return "sort by";
+        return "top";
+    }
+
+    private static String shape(boolean sortAllowed) {
+        return sortAllowed
+                ? "'from ... over { ... } sort by ... top N'"
+                : "'from ... over { ... } top N by <measure>'";
+    }
+
+    private Ast.Pred filter(Clauses clauses) {
+        if (clauses.over == null) return null;
+        List<Ast.Pred> parts = new ArrayList<>();
+        for (TaqlParser.PredicateContext p : clauses.over.overClause().predicate()) parts.add(pred(p));
+        // Filters written on separate lines are implicitly ANDed.
+        return parts.isEmpty() ? null
+                : parts.size() == 1 ? parts.getFirst()
+                : new Ast.And(parts, pos(clauses.over));
+    }
+
+    private List<Ast.SortItem> sort(Clauses clauses) {
+        if (clauses.sort == null) return List.of();
+        List<Ast.SortItem> items = new ArrayList<>();
+        for (TaqlParser.SortItemContext s : clauses.sort.sortClause().sortItem()) {
+            items.add(new Ast.SortItem(expr(s.expression()), s.DESC() != null, pos(s)));
+        }
+        return items;
+    }
+
+    private Ast.Top top(Clauses clauses) {
+        if (clauses.top == null) return null;
+        TaqlParser.TopClauseContext t = clauses.top.topClause();
+        Ast.Expr count = t.countExpr().PARAM() != null
+                ? new Ast.Param(paramName(t.countExpr().PARAM()), pos(t))
+                : lit(Long.parseLong(t.countExpr().INT().getText()), Ast.LitKind.INTEGER, pos(t));
+        return new Ast.Top(count, t.identifier() != null ? name(t.identifier()) : null,
+                within(t.withinClause()), pos(t));
     }
 
     // ------------------------------------------------------------------
