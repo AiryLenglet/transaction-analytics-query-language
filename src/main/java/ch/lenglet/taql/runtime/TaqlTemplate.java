@@ -1,5 +1,6 @@
 package ch.lenglet.taql.runtime;
 
+import ch.lenglet.taql.QueryPolicy;
 import ch.lenglet.taql.TaqlCompiler;
 import ch.lenglet.taql.TaqlQuery;
 import ch.lenglet.taql.plan.Plan;
@@ -52,15 +53,26 @@ public final class TaqlTemplate {
 
     private final TaqlCompiler compiler;
     private final PlanRunner runner;
+    private final QueryPolicy policy;
     private final Options options;
 
     public TaqlTemplate(TaqlCompiler compiler, PlanRunner runner) {
-        this(compiler, runner, Options.DEFAULTS);
+        this(compiler, runner, QueryPolicy.PERMIT_ALL, Options.DEFAULTS);
     }
 
     public TaqlTemplate(TaqlCompiler compiler, PlanRunner runner, Options options) {
+        this(compiler, runner, QueryPolicy.PERMIT_ALL, options);
+    }
+
+    /**
+     * @param policy consulted for every query, after binding and before the store
+     *               is touched. {@link QueryPolicy#PERMIT_ALL} is the default, so
+     *               a deployment that wants a rule has to say so.
+     */
+    public TaqlTemplate(TaqlCompiler compiler, PlanRunner runner, QueryPolicy policy, Options options) {
         this.compiler = compiler;
         this.runner = runner;
+        this.policy = policy;
         this.options = options;
     }
 
@@ -83,6 +95,10 @@ public final class TaqlTemplate {
         TaqlCompiler.Compiled compiled = compiler.compile(query.source());
         Plan plan = compiled.plan();
         List<Object> values = compiled.bind(query.variables());
+
+        // After binding, because the values are the half of the question the plan
+        // does not hold; before running, because refusing afterwards is not refusing.
+        policy.check(query, compiled.restrictions(query.variables()));
 
         for (int attempt = 1; ; attempt++) {
             try {

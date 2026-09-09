@@ -5,7 +5,9 @@ import ch.lenglet.taql.ast.TaqlParser;
 import ch.lenglet.taql.cache.LruPlanCache;
 import ch.lenglet.taql.cache.PlanCache;
 import ch.lenglet.taql.catalog.Catalog;
+import ch.lenglet.taql.plan.FilterRestrictions;
 import ch.lenglet.taql.plan.Plan;
+import ch.lenglet.taql.plan.Restrictions;
 import ch.lenglet.taql.runtime.jdbc.Binder;
 import ch.lenglet.taql.sem.Resolver;
 import ch.lenglet.taql.sem.Tam;
@@ -13,8 +15,12 @@ import ch.lenglet.taql.sql.SqlServerGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The full pipeline, plus the two caches that keep it off the hot path.
@@ -112,6 +118,50 @@ public final class TaqlCompiler {
             return bind(Map.of());
         }
 
+        /**
+         * What this query's filter pins each field down to, for the values it is
+         * about to run with. The plan records where those values live; this is
+         * where they are read.
+         *
+         * Values come back as the caller wrote or supplied them, not as
+         * {@code Binder} will send them -- the two differ only where a physical
+         * type forces a conversion, and an identifier compared for equality is a
+         * string either way.
+         */
+        public Restrictions restrictions(Map<String, Object> variables) {
+            Map<String, Set<Object>> resolved = new LinkedHashMap<>();
+            plan.restrictions().forEach((field, conjuncts) -> {
+                Set<Object> values = null;
+                for (Plan.Restriction conjunct : conjuncts) {
+                    Set<Object> pinned = valuesOf(conjunct, variables);
+                    if (pinned == null) continue;           // this one is unknowable
+                    // Several conjuncts on one field all hold at once.
+                    if (values == null) values = pinned;
+                    else values.retainAll(pinned);
+                }
+                if (values != null) resolved.put(field, values);
+            });
+            return new Restrictions(resolved);
+        }
+
+        /** Null when any reference cannot be read, which makes the conjunct unusable. */
+        private Set<Object> valuesOf(Plan.Restriction conjunct, Map<String, Object> variables) {
+            Set<Object> values = new LinkedHashSet<>();
+            for (Plan.ValueRef ref : conjunct.values()) {
+                switch (ref) {
+                    case Plan.ValueRef.Lit l -> values.add(literals.get(l.slot()));
+                    case Plan.ValueRef.Var v -> {
+                        if (!variables.containsKey(v.name())) return null;
+                        Object supplied = variables.get(v.name());
+                        // 'in $list' contributes every element, '= $x' just itself.
+                        if (supplied instanceof Collection<?> many) values.addAll(many);
+                        else values.add(supplied);
+                    }
+                }
+            }
+            return values;
+        }
+
         /** Carries no literal values; see {@link TaqlQuery#toString()}. */
         @Override
         public String toString() {
@@ -124,7 +174,8 @@ public final class TaqlCompiler {
             Ast.Query parsed = parser.parse(text);
             Plan plan = shapeCache.get(parsed.shapeKey(), shape -> {
                 Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, translator);
-                Plan generated = translator.translate(resolved.query(), resolved.variables(), shape);
+                Plan generated = translator.translate(resolved.query(), resolved.variables(), shape)
+                        .restrictedBy(FilterRestrictions.of(resolved.query()));
                 log.debug("plan {} compiled, {} parameters\n{}",
                         generated.id(), generated.parameters().size(), generated.statement().stripTrailing());
                 log.trace("plan {} has shape {}", generated.id(), shape);
@@ -138,7 +189,8 @@ public final class TaqlCompiler {
     public Plan compileUncached(String source) {
         Ast.Query parsed = parser.parse(source);
         Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, translator);
-        return translator.translate(resolved.query(), resolved.variables(), parsed.shapeKey());
+        return translator.translate(resolved.query(), resolved.variables(), parsed.shapeKey())
+                .restrictedBy(FilterRestrictions.of(resolved.query()));
     }
 
     public Tam.Query analyse(String source) {

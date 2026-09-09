@@ -25,7 +25,14 @@ public record Plan(String statement,
                    List<ParamSlot> parameters,
                    List<Column> columns,
                    Map<String, TaqlType> variables,
-                   String shapeKey) {
+                   String shapeKey,
+                   Map<String, List<Restriction>> restrictions) {
+
+    /** Without restrictions; a translator builds this form and the compiler adds them. */
+    public Plan(String statement, List<ParamSlot> parameters, List<Column> columns,
+                Map<String, TaqlType> variables, String shapeKey) {
+        this(statement, parameters, columns, variables, shapeKey, Map.of());
+    }
 
     public Plan {
         parameters = List.copyOf(parameters);
@@ -36,6 +43,39 @@ public record Plan(String statement,
         // and snapshot tests for no reason. The resolver hands it over in order
         // of first use, which is a sensible order for a human to read; keep it.
         variables = Collections.unmodifiableMap(new LinkedHashMap<>(variables));
+        restrictions = Map.copyOf(restrictions);
+    }
+
+    /**
+     * This plan, plus what its filter pins each field down to. Shape-invariant --
+     * slot indices and variable names are properties of the query's shape, not of
+     * its values -- so it is cached with the plan and resolved per call.
+     */
+    public Plan restrictedBy(Map<String, List<Restriction>> found) {
+        return new Plan(statement, parameters, columns, variables, shapeKey, found);
+    }
+
+    /**
+     * One top-level conjunct pinning a field to a set: {@code ClientId = 'x'} or
+     * {@code ClientId in [...]} or {@code ClientId in $var}. Several conjuncts on
+     * one field intersect, and a conjunct this cannot enumerate is simply absent --
+     * sound, because an extra condition can only narrow the rows a query returns,
+     * never widen them.
+     */
+    public record Restriction(List<ValueRef> values) {
+        public Restriction {
+            values = List.copyOf(values);
+        }
+    }
+
+    /** Where one restricting value comes from, named the way a plan can name it. */
+    public sealed interface ValueRef {
+
+        /** literals[slot] of the query text being run. */
+        record Lit(int slot) implements ValueRef {}
+
+        /** A caller-supplied variable; a list variable contributes all its elements. */
+        record Var(String name) implements ValueRef {}
     }
 
     /**

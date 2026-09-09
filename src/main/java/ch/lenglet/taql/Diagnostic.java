@@ -3,7 +3,7 @@ package ch.lenglet.taql;
 /** A single compile error, carrying enough position info for a useful HTTP 400 body. */
 public record Diagnostic(Phase phase, int line, int column, String message) {
 
-    public enum Phase { SYNTAX, RESOLUTION, TYPE, LIMIT }
+    public enum Phase { SYNTAX, RESOLUTION, TYPE, LIMIT, POLICY }
 
     @Override
     public String toString() {

@@ -539,7 +539,7 @@ components:
                 properties:
                   phase:
                     type: string
-                    enum: [syntax, resolution, type, limit]
+                    enum: [syntax, resolution, type, limit, policy]
                     description: |
                       `syntax` — the text does not parse.
                       `resolution` — a name is not in the catalog.
@@ -548,6 +548,8 @@ components:
                       configured bound: too long, nested too deeply, or its
                       result set exceeds the server's row ceiling. The last of
                       those is only known once the query runs.
+                      `policy` — the query is valid but this caller may not run
+                      it as asked, most often because of the rows it would read.
                   line: { type: integer, minimum: 1 }
                   column: { type: integer, minimum: 1 }
                   message: { type: string }

@@ -3,6 +3,7 @@ package ch.lenglet.taql;
 import ch.lenglet.taql.catalog.DemoCatalog;
 import ch.lenglet.taql.runtime.TaqlTemplate;
 import ch.lenglet.taql.runtime.jdbc.JdbcPlanRunner;
+import ch.lenglet.taql.runtime.jdbc.JdbcPlanRunner;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -59,6 +60,28 @@ class TaqlTemplateTest {
     }
 
     @Test
+    void aRefusedQueryNeverReachesTheStore() {
+        // Refusing after the query has run is not refusing. The stub counts
+        // connections, so this proves the order rather than assuming it.
+        int[] connections = {0};
+        var counted = countingSource(3, connections);
+        QueryPolicy refuseEverything = (query, restrictions) -> {
+            throw new TaqlException(new Diagnostic(Diagnostic.Phase.POLICY, 0, 0, "no"));
+        };
+        var template = new TaqlTemplate(compiler, new JdbcPlanRunner(counted),
+                refuseEverything, TaqlTemplate.Options.DEFAULTS);
+
+        assertThrows(TaqlException.class, () -> template.execute(QUERY));
+        assertEquals(0, connections[0], "the policy must refuse before a connection is opened");
+
+        // ...and a permitting policy still runs the query.
+        var permitted = new TaqlTemplate(compiler, new JdbcPlanRunner(counted),
+                QueryPolicy.PERMIT_ALL, TaqlTemplate.Options.DEFAULTS);
+        assertEquals(3, permitted.execute(QUERY).size());
+        assertEquals(1, connections[0]);
+    }
+
+    @Test
     void theCeilingCannotBeConfiguredAway() {
         assertThrows(IllegalArgumentException.class, () -> new JdbcPlanRunner.Options(30, 0, 1_000));
         assertThrows(IllegalArgumentException.class, () -> new JdbcPlanRunner.Options(30, -1, 1_000));
@@ -67,6 +90,19 @@ class TaqlTemplateTest {
     // ------------------------------------------------------------------
     // A driver that yields `rows` identical rows and records nothing else.
     // ------------------------------------------------------------------
+
+    private static DataSource countingSource(int rows, int[] connections) {
+        DataSource delegate = sourceOf(rows);
+        return proxy(DataSource.class, (method, args) -> {
+            if (!method.getName().equals("getConnection")) return null;
+            connections[0]++;
+            try {
+                return delegate.getConnection();
+            } catch (java.sql.SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
 
     private static DataSource sourceOf(int rows) {
         int[] served = {0};

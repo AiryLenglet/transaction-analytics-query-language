@@ -260,6 +260,33 @@ What `TaqlTemplate` does with that:
 the database does not have. That is a deployment fault, not a caller fault — a
 500 and an alert, never a 400, and no retry will ever fix it.
 
+## Row authorisation
+
+`QueryPolicy` is consulted for every query, after its values are bound and
+before the database is touched:
+
+```java
+new TaqlTemplate(compiler, runner, policy, TaqlTemplate.Options.DEFAULTS)
+```
+
+```java
+Set<Object> asked = restrictions.on("ClientId").orElseThrow(() -> refuse(
+        "every query must name the clients it reads"));
+if (!permittedFor(caller).containsAll(asked)) refuse("not permitted");
+```
+
+It runs that late because it has to. Literals are lifted out of the query at
+parse time, so a cached plan holds a slot index and not `'CH-9021'` — two
+callers asking about different clients share one plan, and the clients only
+exist once the values are bound.
+
+`restrictions.on(field)` returns the values the filter pins that field to, or
+**empty when it cannot tell** — which a policy must treat as *refuse*. Only
+positive `=`, `in [...]` and `in $var` in a top-level conjunct count. A field
+compared with `like` or a range has no set to enumerate, and one mentioned only
+under an `or` restricts nothing at all: `ClientId = '1' or Country = 'CH'`
+returns every client's rows.
+
 ## Limits
 
 Bounds a deployment sets, none of them part of the language:
@@ -291,9 +318,11 @@ Deliberate omissions for a POC, roughly in the order I would add them:
 - **Window functions in flat queries.** They are analysis-only: their arguments
   are measure and group-key names, so `rank` over ungrouped rows needs its own
   design for what to order by.
-- **Authorisation.** The catalog decides which fields exist, but not which
-  fields *this caller* may read. Row-level filters (e.g. force `ClientId` to the
-  caller's own) belong as a mandatory predicate injected at lowering.
+- **Authorisation by injection.** `QueryPolicy` lets a deployment refuse a query
+  whose `ClientId` set the caller may not read (see *Row authorisation*), but the
+  caller still has to name the clients. Forcing a predicate in — so a query that
+  names none is scoped rather than refused — is the other half, and needs the
+  set of clients a caller may read to be enumerable.
 - **Circuit breaking.** Retries are bounded per request but nothing sheds load
   when the database is failing for everyone at once.
 - **Cost control.** `JdbcPlanRunner` caps rows and every statement is bounded by
