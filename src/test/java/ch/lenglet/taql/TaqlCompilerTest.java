@@ -349,6 +349,102 @@ class TaqlCompilerTest {
 
     // ==================================================================
     @Nested
+    @DisplayName("binding")
+    class Binding {
+
+        private List<Object> bind(String query, String name, Object value) {
+            return compiler.compile(query).bind(java.util.Collections.singletonMap(name, value));
+        }
+
+        private TaqlException rejected(String query, String name, Object value) {
+            return assertThrows(TaqlException.class, () -> bind(query, name, value));
+        }
+
+        private static final String STRING_VAR = "list { TransactionId } over { Country = $c }";
+        private static final String INT_VAR = "list { TransactionId } top $n";
+        private static final String DATE_VAR = "list { TransactionId } over { TransactionDate > $d }";
+
+        @Test
+        void aValueThatIsNotTheAdvertisedTypeIsRejectedNotRendered() {
+            // Plan.variables() publishes $c as a string. toString() would accept
+            // all of these and bind their rendering -- parameterised, so not
+            // injectable, but silently asking a question nobody meant to ask.
+            for (Object wrong : List.of(42, List.of("a", "b"), Map.of("k", "v"), new int[]{1, 2}, true)) {
+                TaqlException e = rejected(STRING_VAR, "c", wrong);
+                assertTrue(e.getMessage().contains("$c expects text"), e.getMessage());
+            }
+            assertEquals(List.of("CH"), bind(STRING_VAR, "c", "CH"));
+        }
+
+        @Test
+        void structuresAreNamedByTypeAndNeverEchoedIntoTheMessage() {
+            // The message may be logged or returned, so caller data stays out of it.
+            String message = rejected(STRING_VAR, "c", Map.of("secret", "hunter2")).getMessage();
+            assertFalse(message.contains("hunter2"), message);
+            assertFalse(message.contains("secret"), message);
+        }
+
+        @Test
+        void textIsStillAcceptedForTypesJsonCannotCarry() {
+            // JSON has no date type and one number type, so text has to work --
+            // but it has to parse exactly.
+            assertEquals(List.of(java.time.LocalDate.of(2019, 12, 31)), bind(DATE_VAR, "d", "2019-12-31"));
+            assertEquals(List.of(7L), bind(INT_VAR, "n", "7"));
+
+            assertTrue(rejected(DATE_VAR, "d", "31/12/2019").getMessage().contains("a date like"));
+            assertTrue(rejected(INT_VAR, "n", "abc").getMessage().contains("a whole number"));
+        }
+
+        @Test
+        void aFractionIsNotAWholeNumberButAnIntegralDoubleIs() {
+            // JSON numbers arrive as Double, so 4.0 has to mean 4 -- while
+            // Number#longValue would have quietly turned 3.7 into 3.
+            assertEquals(List.of(4L), bind(INT_VAR, "n", 4.0));
+            assertTrue(rejected(INT_VAR, "n", 3.7).getMessage().contains("a whole number"));
+            // Wider than a long, rather than wrapping.
+            assertTrue(rejected(INT_VAR, "n", 1.0e20).getMessage().contains("a whole number"));
+        }
+
+        @Test
+        void aDecimalKeepsThePrecisionItWasWrittenWith() {
+            // new BigDecimal(0.1d) would bind 0.1000000000000000055511151231257827.
+            assertEquals(List.of(new java.math.BigDecimal("0.1")),
+                    bind("list { TransactionId } over { TransactionValue > $v }", "v", 0.1));
+        }
+
+        @Test
+        void anUnparseableBooleanIsRejectedRatherThanReadAsFalse() {
+            // Boolean.parseBoolean answers false for "yes", "1" and everything
+            // else, which is a wrong answer dressed as a valid one.
+            TaqlCompiler flags = new TaqlCompiler(new Catalog(Map.of("t", new Catalog.Entity(
+                    "t", new Catalog.Table("dbo", "T"), List.of(),
+                    List.of(Catalog.Field.of("id", TaqlType.STRING, new SqlType.VarChar(10)),
+                            Catalog.Field.of("active", TaqlType.BOOLEAN, new SqlType.Bit()))))));
+            String query = "list { id } from t over { active = $on }";
+
+            assertEquals(List.of(true), flags.compile(query).bind(Map.of("on", true)));
+            assertEquals(List.of(false), flags.compile(query).bind(Map.of("on", "false")));
+
+            TaqlException e = assertThrows(TaqlException.class,
+                    () -> flags.compile(query).bind(Map.of("on", "yes")));
+            assertTrue(e.getMessage().contains("$on expects true or false"), e.getMessage());
+        }
+
+        @Test
+        void aBadListElementIsNamedByItsPosition() {
+            String query = "list { TransactionId } over { Country in $cs }";
+            TaqlException e = assertThrows(TaqlException.class,
+                    () -> compiler.compile(query).bind(Map.of("cs", List.of("CH", 42))));
+            assertTrue(e.getMessage().contains("$cs[1] expects text"), e.getMessage());
+
+            TaqlException notAList = assertThrows(TaqlException.class,
+                    () -> compiler.compile(query).bind(Map.of("cs", "CH")));
+            assertTrue(notAList.getMessage().contains("$cs must be a list"), notAList.getMessage());
+        }
+    }
+
+    // ==================================================================
+    @Nested
     @DisplayName("limits")
     class Limits {
 
