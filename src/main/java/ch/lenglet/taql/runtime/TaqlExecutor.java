@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Runs a compiled plan. The only place JDBC appears.
@@ -46,7 +47,7 @@ public final class TaqlExecutor {
      * @param queryTimeoutSeconds per-statement timeout; 0 disables it, which is
      *                            almost never what a service wants.
      * @param maxAttempts         total attempts for a retryable failure.
-     * @param retryBackoffMillis  base delay, doubled per attempt.
+     * @param retryBackoffMillis  base delay, doubled per attempt and jittered.
      * @param maxRows             hard ceiling on rows returned. A query that
      *                            would exceed it fails rather than returning a
      *                            silently truncated answer: an analytical result
@@ -65,6 +66,7 @@ public final class TaqlExecutor {
 
         public Options {
             if (maxAttempts < 1) throw new IllegalArgumentException("maxAttempts must be at least 1");
+            if (retryBackoffMillis < 0) throw new IllegalArgumentException("retryBackoffMillis cannot be negative");
             if (maxRows < 1) throw new IllegalArgumentException("maxRows must be at least 1");
             if (fetchSize < 1) throw new IllegalArgumentException("fetchSize must be at least 1");
         }
@@ -157,9 +159,25 @@ public final class TaqlExecutor {
                         + " rows; add 'top N', group it, or narrow the filter"));
     }
 
+    /**
+     * Exponential backoff, jittered.
+     *
+     * Without the jitter this is synchronised retry: every caller that lost the
+     * same deadlock, or that was holding a connection when the server went away,
+     * sleeps exactly the same doubling interval and collides again on each
+     * wake-up. Spreading them is most of the value of backing off at all.
+     *
+     * Half the interval is fixed and half is random, so there is still a floor
+     * under the wait -- full jitter can pick a delay near zero and retry into a
+     * server that has not recovered.
+     */
     private void backoff(int attempt, SQLException cause) {
+        // Shift capped so a generous maxAttempts cannot overflow into a
+        // negative delay, which Thread.sleep rejects.
+        long ceiling = options.retryBackoffMillis() << Math.min(attempt - 1, 16);
+        long delay = ceiling / 2 + ThreadLocalRandom.current().nextLong(ceiling / 2 + 1);
         try {
-            Thread.sleep(options.retryBackoffMillis() << (attempt - 1));
+            Thread.sleep(delay);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new TaqlExecutionException(SqlFailure.classify(cause), cause, attempt);

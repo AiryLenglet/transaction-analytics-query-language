@@ -119,7 +119,7 @@ class TaqlCompilerTest {
             // it a NULL result instead of a failed request.
             Plan plan = compiler.compileUncached(
                     "analysis by Country { total = sum(TransactionValue)  pct = share(total) }");
-            assertTrue(plan.sql().contains("g.[total] * 1.0 / NULLIF(SUM(g.[total]) OVER (), 0) AS [pct]"),
+            assertTrue(plan.sql().contains("q.[total] * 1.0 / NULLIF(SUM(q.[total]) OVER (), 0) AS [pct]"),
                     plan.sql());
             assertEquals(TaqlType.DECIMAL, plan.columns().getLast().type());
         }
@@ -129,14 +129,14 @@ class TaqlCompilerTest {
             assertTrue(compiler.compileUncached(
                     "analysis by Country, Currency { total = sum(TransactionValue) "
                             + " pct = share(total) within Country }")
-                    .sql().contains("OVER (PARTITION BY g.[Country])"));
+                    .sql().contains("OVER (PARTITION BY q.[Country])"));
         }
 
         @Test
         void rankOrdersByItsArgumentDescendingSoRankOneIsTheLargest() {
             Plan plan = compiler.compileUncached(
                     "analysis by Country { total = sum(TransactionValue)  rk = rank(total) }");
-            assertTrue(plan.sql().contains("RANK() OVER (ORDER BY g.[total] DESC) AS [rk]"), plan.sql());
+            assertTrue(plan.sql().contains("RANK() OVER (ORDER BY q.[total] DESC) AS [rk]"), plan.sql());
             assertEquals(TaqlType.INTEGER, plan.columns().getLast().type());
         }
 
@@ -147,7 +147,7 @@ class TaqlCompilerTest {
                             + "  total = sum(TransactionValue)"
                             + "  prev = lag(total) within Country ordered by y }");
             assertTrue(plan.sql().contains(
-                    "LAG(g.[total]) OVER (PARTITION BY g.[Country] ORDER BY g.[y] ASC) AS [prev]"), plan.sql());
+                    "LAG(q.[total]) OVER (PARTITION BY q.[Country] ORDER BY q.[y] ASC) AS [prev]"), plan.sql());
             assertEquals(TaqlType.DECIMAL, plan.columns().getLast().type());
         }
 
@@ -158,7 +158,7 @@ class TaqlCompilerTest {
                             + " top 2 by total within Country");
             assertAll(
                     () -> assertTrue(plan.sql().contains(
-                            "ROW_NUMBER() OVER (PARTITION BY g.[Country] ORDER BY g.[total] DESC)"), plan.sql()),
+                            "ROW_NUMBER() OVER (PARTITION BY q.[Country] ORDER BY q.[total] DESC)"), plan.sql()),
                     () -> assertTrue(plan.sql().contains("WHERE w.[__rank] <= ?")),
                     // A per-group cap is not a global one.
                     () -> assertFalse(plan.sql().contains("TOP")),
@@ -177,7 +177,7 @@ class TaqlCompilerTest {
                     () -> assertEquals(2, plan.sql().split("FROM \\(", -1).length - 1, plan.sql()),
                     () -> assertTrue(plan.sql().contains("END AS [b]")),
                     () -> assertTrue(plan.sql().contains("GROUP BY g.[b]")),
-                    () -> assertTrue(plan.sql().contains("NULLIF(SUM(g.[total])")));
+                    () -> assertTrue(plan.sql().contains("NULLIF(SUM(q.[total])")));
         }
 
         @Test
@@ -337,6 +337,23 @@ class TaqlCompilerTest {
             Plan plan = compiler.compileUncached("list { transactionId } over { direction = 'C' }");
             Plan.Auto slot = (Plan.Auto) plan.parameters().getFirst();
             assertEquals(new SqlType.VarChar(1), slot.sqlType());
+        }
+
+        @Test
+        void theVariableContractKeepsAStableOrder() {
+            // plan.variables() is published as the endpoint's schema, so a
+            // generated document must not reshuffle its own properties between
+            // restarts. Map.copyOf randomises iteration order per JVM, so this
+            // asserts the order itself -- checking only that two calls agree
+            // would pass in a single JVM even when it is randomised.
+            Plan plan = compiler.compileUncached("""
+                    analysis by country { total = sum(TransactionValue) }
+                    over { clientId in $clients, TransactionDate in $from..$to }
+                    top $limit by total
+                    """);
+            assertEquals(List.of("clients", "from", "to", "limit"),
+                    List.copyOf(plan.variables().keySet()),
+                    "variables should be listed in order of first use");
         }
 
         @Test
@@ -763,7 +780,7 @@ class TaqlCompilerTest {
         }
 
         @Test
-        void aliasesAreDisambiguatedAndAvoidTheDerivedTableName() {
+        void aliasesAreDisambiguatedAndAvoidTheGeneratorsOwnLevelNames() {
             // Customers and Contracts both want 'c'; Groups wants the name the
             // derived table uses.
             TaqlCompiler c = new TaqlCompiler(new Catalog(Map.of("orders", new Catalog.Entity(
@@ -782,6 +799,39 @@ class TaqlCompilerTest {
                     () -> assertTrue(sql.contains("[dbo].[Groups] AS g2"), sql),
                     () -> assertTrue(sql.contains("INNER JOIN [dbo].[Customers] AS c ON g2.[Id] = c.[Id]"), sql),
                     () -> assertTrue(sql.contains("LEFT JOIN [dbo].[Contracts] AS c2 ON g2.[Id] = c2.[Id]"), sql));
+        }
+
+        @Test
+        void noTableTakesTheNameOfAGeneratorLevelEvenWhenAllThreeNest() {
+            // The derived, window and rank levels are 'g', 'q' and 'w'. A Wires
+            // table used to be handed 'w' and end up nested inside the rank
+            // level of the same name -- legal, because the scopes never overlap,
+            // but only by accident.
+            TaqlCompiler c = new TaqlCompiler(new Catalog(Map.of("wires", new Catalog.Entity(
+                    "wires", new Catalog.Table("dbo", "Wires"), List.of(),
+                    List.of(Catalog.Field.of("Country", TaqlType.STRING, new SqlType.VarChar(2)),
+                            Catalog.Field.of("Name", TaqlType.STRING, new SqlType.VarChar(50)),
+                            Catalog.Field.of("Amount", TaqlType.DECIMAL, new SqlType.Decimal(10, 2)))))));
+
+            String sql = c.compileUncached("analysis by Country, Name { total = sum(Amount) }"
+                    + " from wires top 2 by total within Country").sql();
+
+            assertAll(
+                    // the table is pushed off 'w', which the rank level holds
+                    () -> assertTrue(sql.contains("[dbo].[Wires] AS w2"), sql),
+                    () -> assertTrue(sql.contains("w2.[Country]"), sql),
+                    // no group key carries a parameter here, so there is no
+                    // derived level -- just the grouped level and the rank one,
+                    // each with its own name rather than nesting inside itself
+                    () -> assertEquals(1, countOf(sql, ") AS q"), sql),
+                    () -> assertEquals(1, countOf(sql, ") AS w"), sql),
+                    () -> assertEquals(0, countOf(sql, ") AS g"), sql));
+        }
+
+        private static int countOf(String haystack, String needle) {
+            int count = 0;
+            for (int i = haystack.indexOf(needle); i >= 0; i = haystack.indexOf(needle, i + 1)) count++;
+            return count;
         }
 
         @Test

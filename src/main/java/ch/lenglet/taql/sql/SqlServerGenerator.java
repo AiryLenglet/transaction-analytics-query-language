@@ -28,8 +28,11 @@ import java.util.Set;
  */
 public final class SqlServerGenerator {
 
+    // Aliases the generator gives its own levels. They must differ from each
+    // other -- all three can nest in one statement -- and no table may be given
+    // one, which allocateAliases() enforces by reserving them first.
     private static final String DERIVED = "g";
-    private static final String WINDOWED = "g";
+    private static final String WINDOWED = "q";
     private static final String RANKED = "w";
     private static final String RANK_COLUMN = "__rank";
     private static final String ROOT = "";
@@ -273,7 +276,6 @@ public final class SqlServerGenerator {
      */
     private void analysisWithWindows(Tam.Query q) {
         boolean ranked = q.rankFilter() != null;
-        String inner = ranked ? RANKED : WINDOWED;
 
         if (ranked) {
             selectKeyword(q);
@@ -685,10 +687,16 @@ public final class SqlServerGenerator {
      * given table reads the same across every plan on that entity. Allocation is
      * a pure function of the entity, so the SQL text stays byte-identical for a
      * given query shape and the plan cache is unaffected.
+     *
+     * The generator's own level aliases are reserved before any table is named,
+     * so a Groups or Wires table cannot be handed the name a derived, window or
+     * rank level is about to use.
      */
     private static Map<String, String> allocateAliases(Catalog.Entity entity) {
         Set<String> taken = new LinkedHashSet<>();
         taken.add(DERIVED);
+        taken.add(WINDOWED);
+        taken.add(RANKED);
         Map<String, String> aliases = new LinkedHashMap<>();
         aliases.put(ROOT, allocate(entity.table().name(), taken));
         for (Catalog.Join j : entity.joins()) aliases.put(j.name(), allocate(j.table().name(), taken));

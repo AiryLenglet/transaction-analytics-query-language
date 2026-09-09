@@ -124,15 +124,17 @@ public enum SqlFailure {
             297,    // user does not have permission to perform this action
             18456); // login failed
 
-    /** Classifies a failure, walking the exception chain for the first code we recognise. */
+    /**
+     * Classifies a failure, walking the exception chain for the first code we
+     * recognise. mssql-jdbc often reports the useful code on a linked exception
+     * rather than the one thrown, so stopping at the head would lose it.
+     */
     public static SqlFailure classify(SQLException exception) {
-        SqlFailure fallback = null;
         for (SQLException e = exception; e != null; e = e.getNextException()) {
             SqlFailure classified = classifyOne(e);
             if (classified != UNKNOWN) return classified;
-            if (fallback == null) fallback = classified;
         }
-        return fallback == null ? UNKNOWN : fallback;
+        return UNKNOWN;
     }
 
     private static SqlFailure classifyOne(SQLException e) {

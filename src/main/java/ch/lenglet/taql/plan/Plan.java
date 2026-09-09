@@ -3,6 +3,8 @@ package ch.lenglet.taql.plan;
 import ch.lenglet.taql.SqlType;
 import ch.lenglet.taql.TaqlType;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -28,7 +30,12 @@ public record Plan(String sql,
     public Plan {
         parameters = List.copyOf(parameters);
         columns = List.copyOf(columns);
-        variables = Map.copyOf(variables);
+        // Not Map.copyOf: its iteration order is randomised per JVM, and this
+        // map is published as the endpoint's contract. A generated schema that
+        // reorders its own properties on every restart breaks caching, diffs
+        // and snapshot tests for no reason. The resolver hands it over in order
+        // of first use, which is a sensible order for a human to read; keep it.
+        variables = Collections.unmodifiableMap(new LinkedHashMap<>(variables));
     }
 
     public record Column(String name, TaqlType type) {}

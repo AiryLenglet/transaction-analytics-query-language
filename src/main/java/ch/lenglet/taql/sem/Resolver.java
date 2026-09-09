@@ -8,6 +8,7 @@ import ch.lenglet.taql.ast.Ast;
 import ch.lenglet.taql.catalog.Catalog;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -65,7 +66,9 @@ public final class Resolver {
         Tam.Query query = r.statement(parsed.stmt());
         r.checkAllVariablesTyped();
         if (!r.errors.isEmpty()) throw new TaqlException(r.errors);
-        return new Result(query, Map.copyOf(r.variableTypes));
+        // Insertion-ordered: the plan publishes this as its contract, and
+        // Map.copyOf would randomise the order per JVM. See Plan's constructor.
+        return new Result(query, Collections.unmodifiableMap(new LinkedHashMap<>(r.variableTypes)));
     }
 
     // ------------------------------------------------------------------
