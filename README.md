@@ -266,8 +266,8 @@ Bounds a deployment sets, none of them part of the language:
 
 | bound | default | where |
 |---|---|---|
-| query length | 8192 characters | `TaqlParserFacade.Limits` |
-| nesting depth | 256 levels | `TaqlParserFacade.Limits`, enforced as the AST is built |
+| query length | 8192 characters | `TaqlParser.Limits` |
+| nesting depth | 256 levels | `TaqlParser.Limits`, enforced as the AST is built |
 | rows returned | 10 000 | `JdbcPlanRunner.Options` |
 | statement timeout | 30 s | `JdbcPlanRunner.Options` |
 

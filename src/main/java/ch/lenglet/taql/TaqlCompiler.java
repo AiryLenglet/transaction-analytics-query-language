@@ -1,7 +1,7 @@
 package ch.lenglet.taql;
 
 import ch.lenglet.taql.ast.Ast;
-import ch.lenglet.taql.ast.TaqlParserFacade;
+import ch.lenglet.taql.ast.TaqlParser;
 import ch.lenglet.taql.cache.LruPlanCache;
 import ch.lenglet.taql.cache.PlanCache;
 import ch.lenglet.taql.catalog.Catalog;
@@ -54,6 +54,7 @@ public final class TaqlCompiler {
 
     private final Catalog catalog;
     private final Backend backend;
+    private final TaqlParser parser;
     private final Resolver.Options options;
     private final PlanCache<String, Compiled> textCache;
     private final PlanCache<String, Plan> shapeCache;
@@ -73,7 +74,7 @@ public final class TaqlCompiler {
      */
     public TaqlCompiler(Catalog catalog, Backend backend, Resolver.Options options,
                         int textCacheSize, int shapeCacheSize) {
-        this(catalog, backend, options,
+        this(catalog, backend, new TaqlParser(), options,
                 new LruPlanCache<>(textCacheSize), new LruPlanCache<>(shapeCacheSize));
     }
 
@@ -82,15 +83,19 @@ public final class TaqlCompiler {
      * ones -- or a no-op pair, when compiling every time is preferable to
      * holding query text in memory.
      *
+     * @param parser     carries the parse limits -- query length and nesting
+     *                   depth -- which are a deployment's call and were not
+     *                   reachable while parsing was static.
      * @param textCache  keyed on exact source, so it holds the literal values
      *                   that came with the query. That is client data; see
      *                   {@link TaqlQuery#toString()}.
      * @param shapeCache keyed on the shape, which is value-free by construction.
      */
-    public TaqlCompiler(Catalog catalog, Backend backend, Resolver.Options options,
+    public TaqlCompiler(Catalog catalog, Backend backend, TaqlParser parser, Resolver.Options options,
                         PlanCache<String, Compiled> textCache, PlanCache<String, Plan> shapeCache) {
         this.catalog = catalog;
         this.backend = backend;
+        this.parser = parser;
         this.options = options;
         this.textCache = textCache;
         this.shapeCache = shapeCache;
@@ -116,7 +121,7 @@ public final class TaqlCompiler {
 
     public Compiled compile(String source) {
         return textCache.get(source, text -> {
-            Ast.Query parsed = TaqlParserFacade.parse(text);
+            Ast.Query parsed = parser.parse(text);
             Plan plan = shapeCache.get(parsed.shapeKey(), shape -> {
                 Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, backend);
                 Plan generated = backend.generate(resolved.query(), resolved.variables(), shape);
@@ -131,13 +136,13 @@ public final class TaqlCompiler {
 
     /** Parses and type-checks without consulting either cache -- for validation endpoints and tests. */
     public Plan compileUncached(String source) {
-        Ast.Query parsed = TaqlParserFacade.parse(source);
+        Ast.Query parsed = parser.parse(source);
         Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, backend);
         return backend.generate(resolved.query(), resolved.variables(), parsed.shapeKey());
     }
 
     public Tam.Query analyse(String source) {
-        return Resolver.resolve(catalog, TaqlParserFacade.parse(source), options, backend).query();
+        return Resolver.resolve(catalog, parser.parse(source), options, backend).query();
     }
 
     public PlanCache<String, Compiled> textCache() {

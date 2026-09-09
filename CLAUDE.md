@@ -29,6 +29,8 @@ The parser is generated at build time from `src/main/antlr4/.../Taql.g4` — aft
 
 Database is optional. `./runMsSqlServer.sh` starts SQL Server 2019 in Docker (sa / `Password22`, port 1433); `Main` then also *executes* the examples and applies `src/main/resources/init.sql`. Without it every query still compiles — and its SQL is still logged — then fails with a classified execution error. The whole test suite passes either way; the tests never touch a database.
 
+**Collaborators are objects, not statics.** `TaqlCompiler` takes a `Backend`, a `TaqlParser` (which carries the parse limits), a `Resolver.Options` and two `PlanCache`s; `TaqlTemplate` takes a compiler and a `PlanRunner`. Nothing on the path from text to rows is reached through a static, which is what makes limits, caches, dialect and store all a deployment's call rather than the library's.
+
 **Logging.** `Main` holds only a `TaqlTemplate`, so the generated SQL, plan ids and cache behaviour come from the library's own debug logs rather than from the driver — which is what an operator sees in production. `slf4j-api` is a normal dependency; `slf4j-simple` is `runtime` scope for the demo only and an embedder should exclude it. `src/main/resources/simplelogger.properties` sets debug on `ch.lenglet`; the copy in `src/test/resources` wins on the test classpath and keeps the suite quiet.
 
 What is safe to log is a deliberate line: the shape key and the generated SQL are value-free by construction, so they can go in a log; the query source and the bound values cannot — they are the client ids and amounts the query asked about. `Plan.id()` is a short hash of the shape key that correlates the compile line with every execution of it.
@@ -36,11 +38,11 @@ What is safe to log is a deliberate line: the shape key and the generated SQL ar
 ## Pipeline
 
 ```
-text → TaqlParserFacade (ANTLR)  → parse tree
-     → AstBuilder                → Ast          untyped syntax model, LITERALS LIFTED OUT
-     → Resolver (+ Catalog)      → Tam          typed, resolved, store-agnostic
-     → Backend.generate          → Plan         statement text + parameter recipe
-     → PlanRunner.run            → List<Map<String,Object>>
+text → TaqlParser (ANTLR)        → parse tree
+     → AstBuilder                 → Ast          untyped syntax model, LITERALS LIFTED OUT
+     → Resolver (+ Catalog)       → Tam          typed, resolved, store-agnostic
+     → Backend.generate           → Plan         statement text + parameter recipe
+     → PlanRunner.run             → List<Map<String,Object>>
 ```
 
 `TaqlTemplate` is the API and names no store: it compiles, binds, and retries what a `FailureCategory` says is worth retrying. The two seams either side of it are `Backend` (query → statement, pure and shareable) and `PlanRunner` (statement → rows, holds the connection). They are separate because a compiler must not need a live connection — a validation endpoint has no database.

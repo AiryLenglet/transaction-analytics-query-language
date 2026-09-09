@@ -1,5 +1,6 @@
 package ch.lenglet.taql;
 
+import ch.lenglet.taql.ast.TaqlParser;
 import ch.lenglet.taql.cache.PlanCache;
 import ch.lenglet.taql.catalog.Catalog;
 import ch.lenglet.taql.catalog.DemoCatalog;
@@ -506,6 +507,31 @@ class TaqlCompilerTest {
         }
 
         @Test
+        void aDeploymentCanTightenTheLimits() {
+            // The point of the parser being an object: these are a deployment's
+            // call, and while parsing was static they were not reachable at all.
+            TaqlCompiler strict = new TaqlCompiler(DemoCatalog.create(),
+                    new ch.lenglet.taql.sql.SqlServerGenerator(),
+                    new TaqlParser(new TaqlParser.Limits(64, 4)),
+                    Resolver.Options.DEFAULTS,
+                    new ch.lenglet.taql.cache.LruPlanCache<>(16),
+                    new ch.lenglet.taql.cache.LruPlanCache<>(16));
+
+            // Comfortably legal by default, too long here.
+            String longer = "list { TransactionId } over { Country = 'CH', Currency = 'CHF' }";
+            assertEquals(64, longer.length());
+            compiler.compile(longer);
+            var tooLong = assertThrows(TaqlException.class, () -> strict.compile(longer + " "));
+            assertTrue(tooLong.getMessage().contains("the limit is 64"), tooLong.getMessage());
+
+            // Same for depth: five levels of nesting passes by default, not here.
+            String nested = "list { x = ((((1)))) + 1 }";
+            compiler.compile(nested);
+            var tooDeep = assertThrows(TaqlException.class, () -> strict.compile(nested));
+            assertTrue(tooDeep.getMessage().contains("nests more than 4"), tooDeep.getMessage());
+        }
+
+        @Test
         void breadthIsNotDepthSoAWideQueryStillCompiles() {
             // 1000 list items nest one level, however long the text: the bound is
             // on nesting, not on size of the query's answer.
@@ -649,7 +675,8 @@ class TaqlCompilerTest {
             // Worth pinning, because the one serious bug this codebase had was a
             // cache handing one query another query's values.
             TaqlCompiler uncached = new TaqlCompiler(DemoCatalog.create(),
-                    new ch.lenglet.taql.sql.SqlServerGenerator(), Resolver.Options.DEFAULTS,
+                    new ch.lenglet.taql.sql.SqlServerGenerator(),
+                    new ch.lenglet.taql.ast.TaqlParser(), Resolver.Options.DEFAULTS,
                     new NeverCaches<>(), new NeverCaches<>());
 
             String query = "list { TransactionId } over { TransactionValue > 500 } top 5";

@@ -3,7 +3,6 @@ package ch.lenglet.taql.ast;
 import ch.lenglet.taql.Diagnostic;
 import ch.lenglet.taql.TaqlException;
 import ch.lenglet.taql.grammar.TaqlLexer;
-import ch.lenglet.taql.grammar.TaqlParser;
 import org.antlr.v4.runtime.BaseErrorListener;
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
@@ -20,6 +19,10 @@ import java.util.List;
 /**
  * Text -> untyped syntax model, collecting every syntax error rather than
  * failing on the first.
+ *
+ * ANTLR generates a parser of the same name from the grammar, so the generated
+ * one is spelled out in full below. This is the one callers want: it holds the
+ * limits, runs both stages, and hands back an {@link Ast.Query}.
  *
  * <h2>Two-stage parsing</h2>
  * The {@code expression} rule is left-recursive, and ANTLR's full LL(*)
@@ -44,9 +47,18 @@ import java.util.List;
  * the {@link StackOverflowError} catch covers a thread with a smaller stack
  * than these were measured against.
  */
-public final class TaqlParserFacade {
+public final class TaqlParser {
 
-    private TaqlParserFacade() {}
+    private final Limits limits;
+
+    /** With the default limits; see {@link Limits}. */
+    public TaqlParser() {
+        this(Limits.DEFAULTS);
+    }
+
+    public TaqlParser(Limits limits) {
+        this.limits = limits;
+    }
 
     /**
      * @param maxSourceLength  characters accepted in one query. 8 KB is far
@@ -74,18 +86,14 @@ public final class TaqlParserFacade {
         }
     }
 
-    public static Ast.Query parse(String source) {
-        return parse(source, Limits.DEFAULTS);
-    }
-
-    public static Ast.Query parse(String source, Limits limits) {
+    public Ast.Query parse(String source) {
         if (source.length() > limits.maxSourceLength()) {
             throw new TaqlException(new Diagnostic(Diagnostic.Phase.LIMIT, 1, 1,
                     "query is " + source.length() + " characters; the limit is " + limits.maxSourceLength()));
         }
 
         try {
-            TaqlParser.QueryContext tree = parseFast(source);
+            ch.lenglet.taql.grammar.TaqlParser.QueryContext tree = parseFast(source);
             if (tree == null) tree = parseWithDiagnostics(source);
             return AstBuilder.build(tree, limits.maxNestingDepth());
         } catch (StackOverflowError overflow) {
@@ -100,8 +108,8 @@ public final class TaqlParserFacade {
     }
 
     /** SLL, bailing on the first error. Returns null when the input needs the LL stage. */
-    private static TaqlParser.QueryContext parseFast(String source) {
-        TaqlParser parser = parser(source, new CollectingListener(new ArrayList<>()));
+    private static ch.lenglet.taql.grammar.TaqlParser.QueryContext parseFast(String source) {
+        ch.lenglet.taql.grammar.TaqlParser parser = parser(source, new CollectingListener(new ArrayList<>()));
         parser.getInterpreter().setPredictionMode(PredictionMode.SLL);
         parser.setErrorHandler(new BailErrorStrategy());
         try {
@@ -112,23 +120,23 @@ public final class TaqlParserFacade {
     }
 
     /** Full LL, collecting every error so the caller gets all of them at once. */
-    private static TaqlParser.QueryContext parseWithDiagnostics(String source) {
+    private static ch.lenglet.taql.grammar.TaqlParser.QueryContext parseWithDiagnostics(String source) {
         List<Diagnostic> errors = new ArrayList<>();
-        TaqlParser parser = parser(source, new CollectingListener(errors));
+        ch.lenglet.taql.grammar.TaqlParser parser = parser(source, new CollectingListener(errors));
         parser.getInterpreter().setPredictionMode(PredictionMode.LL);
         parser.setErrorHandler(new DefaultErrorStrategy());
 
-        TaqlParser.QueryContext tree = parser.query();
+        ch.lenglet.taql.grammar.TaqlParser.QueryContext tree = parser.query();
         if (!errors.isEmpty()) throw new TaqlException(errors);
         return tree;
     }
 
-    private static TaqlParser parser(String source, BaseErrorListener listener) {
+    private static ch.lenglet.taql.grammar.TaqlParser parser(String source, BaseErrorListener listener) {
         TaqlLexer lexer = new TaqlLexer(CharStreams.fromString(source));
         lexer.removeErrorListeners();
         lexer.addErrorListener(listener);
 
-        TaqlParser parser = new TaqlParser(new CommonTokenStream(lexer));
+        ch.lenglet.taql.grammar.TaqlParser parser = new ch.lenglet.taql.grammar.TaqlParser(new CommonTokenStream(lexer));
         parser.removeErrorListeners();
         parser.addErrorListener(listener);
         return parser;

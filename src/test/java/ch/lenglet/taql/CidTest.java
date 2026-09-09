@@ -1,7 +1,7 @@
 package ch.lenglet.taql;
 
 import ch.lenglet.taql.ast.Ast;
-import ch.lenglet.taql.ast.TaqlParserFacade;
+import ch.lenglet.taql.ast.TaqlParser;
 import ch.lenglet.taql.catalog.DemoCatalog;
 import ch.lenglet.taql.runtime.jdbc.SqlFailure;
 import ch.lenglet.taql.runtime.TaqlExecutionException;
@@ -53,7 +53,7 @@ class CidTest {
 
     @Test
     void aParsedQueryDoesNotRenderTheLiftedLiterals() {
-        Ast.Query parsed = TaqlParserFacade.parse("list { TransactionId } over { ClientId = '" + CID + "' }");
+        Ast.Query parsed = new TaqlParser().parse("list { TransactionId } over { ClientId = '" + CID + "' }");
         assertFalse(parsed.toString().contains(CID), parsed.toString());
     }
 
