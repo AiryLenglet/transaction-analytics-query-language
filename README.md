@@ -9,7 +9,7 @@ DSL text
   -> untyped syntax model      (ast/Ast, ast/AstBuilder)   << literals lifted out here
   -> name resolution + types   (sem/Resolver, catalog/)
   -> typed analytics model     (sem/Tam)
-  -> T-SQL + parameter recipe  (sql/SqlServerGenerator, plan/Plan)
+  -> T-SQL + parameter recipe  (QueryTranslator, sql/SqlServerGenerator, plan/Plan)
 ```
 
 Run `mvn compile exec:java` to run every query in `src/main/resources/example.taql`

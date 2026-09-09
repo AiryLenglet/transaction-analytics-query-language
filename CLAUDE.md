@@ -29,7 +29,7 @@ The parser is generated at build time from `src/main/antlr4/.../Taql.g4` — aft
 
 Database is optional. `./runMsSqlServer.sh` starts SQL Server 2019 in Docker (sa / `Password22`, port 1433); `Main` then also *executes* the examples and applies `src/main/resources/init.sql`. Without it every query still compiles — and its SQL is still logged — then fails with a classified execution error. The whole test suite passes either way; the tests never touch a database.
 
-**Collaborators are objects, not statics.** `TaqlCompiler` takes a `Backend`, a `TaqlParser` (which carries the parse limits), a `Resolver.Options` and two `PlanCache`s; `TaqlTemplate` takes a compiler and a `PlanRunner`. Nothing on the path from text to rows is reached through a static, which is what makes limits, caches, dialect and store all a deployment's call rather than the library's.
+**Collaborators are objects, not statics.** `TaqlCompiler` takes a `QueryTranslator`, a `TaqlParser` (which carries the parse limits), a `Resolver.Options` and two `PlanCache`s; `TaqlTemplate` takes a compiler and a `PlanRunner`. Nothing on the path from text to rows is reached through a static, which is what makes limits, caches, dialect and store all a deployment's call rather than the library's.
 
 **Logging.** `Main` holds only a `TaqlTemplate`, so the generated SQL, plan ids and cache behaviour come from the library's own debug logs rather than from the driver — which is what an operator sees in production. `slf4j-api` is a normal dependency; `slf4j-simple` is `runtime` scope for the demo only and an embedder should exclude it. `src/main/resources/simplelogger.properties` sets debug on `ch.lenglet`; the copy in `src/test/resources` wins on the test classpath and keeps the suite quiet.
 
@@ -41,15 +41,15 @@ What is safe to log is a deliberate line: the shape key and the generated SQL ar
 text → TaqlParser (ANTLR)        → parse tree
      → AstBuilder                 → Ast          untyped syntax model, LITERALS LIFTED OUT
      → Resolver (+ Catalog)       → Tam          typed, resolved, store-agnostic
-     → Backend.generate           → Plan         statement text + parameter recipe
+     → QueryTranslator.translate  → Plan         statement text + parameter recipe
      → PlanRunner.run             → List<Map<String,Object>>
 ```
 
-`TaqlTemplate` is the API and names no store: it compiles, binds, and retries what a `FailureCategory` says is worth retrying. The two seams either side of it are `Backend` (query → statement, pure and shareable) and `PlanRunner` (statement → rows, holds the connection). They are separate because a compiler must not need a live connection — a validation endpoint has no database.
+`TaqlTemplate` is the API and names no store: it compiles, binds, and retries what a `FailureCategory` says is worth retrying. The two seams either side of it are `QueryTranslator` (query → statement, pure and shareable) and `PlanRunner` (statement → rows, holds the connection). They are separate because a compiler must not need a live connection — a validation endpoint has no database.
 
 The packages say which is which. `ch.lenglet.taql.runtime` is store-neutral; `runtime.jdbc` holds `JdbcPlanRunner`, `Binder` and `SqlFailure`; `ch.lenglet.taql.sql` holds `SqlServerGenerator` and `SqlType`. `grep -rl 'java.sql\|javax.sql\|SqlType' src/main/java` should return only those two packages, `DemoCatalog` and `Main`.
 
-Everything above `Backend` is store-agnostic and must stay that way: `Tam` and `Plan` carry a `PhysicalType`, never a `SqlType`. `Backend` is the single seam where a query becomes T-SQL — it supplies both the statement and the default physical type for a value no column has typed, which is why the resolver takes one. `SqlServerGenerator` is the only implementation; `grep -l SqlType src/main/java` shows exactly which files are dialect-specific, and that list should not grow.
+Everything above `QueryTranslator` is language-agnostic and must stay that way: `Tam` and `Plan` carry a `PhysicalType`, never a `SqlType`. `QueryTranslator` is the single seam where a query becomes T-SQL — it supplies both the statement and the default physical type for a value no column has typed, which is why the resolver takes one. It is named for what it does: it translates, and never touches a store; that is `PlanRunner`. `SqlServerGenerator` is the only implementation; `grep -l SqlType src/main/java` shows exactly which files are dialect-specific, and that list should not grow.
 
 Two things a second backend needs that are deliberately **not** designed yet, because they cannot be designed well from one implementation: an execution seam (`runtime` is JDBC to its bones — connection, error taxonomy, driver), and a capability model so a backend that cannot express a construct — window functions have no analogue outside SQL — yields a positioned diagnostic instead of the generator throwing `IllegalStateException`. `Catalog` is the third: its types are neutral now, but `Table`/`Join`/`Field.column` describe rows matched on key columns, which is not how a graph is addressed.
 

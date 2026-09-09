@@ -7,7 +7,7 @@ import java.util.Map;
 
 /**
  * Runs a compiled plan against a store. The counterpart to
- * {@link ch.lenglet.taql.Backend}: that one turns a query into a statement,
+ * {@link ch.lenglet.taql.QueryTranslator}: that one turns a query into a statement,
  * this one runs it.
  *
  * The two are separate because they need different things. A backend is pure

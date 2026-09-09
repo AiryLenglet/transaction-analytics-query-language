@@ -1,6 +1,6 @@
 package ch.lenglet.taql.sem;
 
-import ch.lenglet.taql.Backend;
+import ch.lenglet.taql.QueryTranslator;
 import ch.lenglet.taql.Diagnostic;
 import ch.lenglet.taql.TaqlException;
 import ch.lenglet.taql.PhysicalType;
@@ -50,23 +50,23 @@ public final class Resolver {
     private final Catalog catalog;
     private final Options options;
     /** Supplies the physical type for a value no column has typed. */
-    private final Backend backend;
+    private final QueryTranslator translator;
     private final List<Diagnostic> errors = new ArrayList<>();
     private final Set<String> requiredJoins = new LinkedHashSet<>();
     private final Map<String, TaqlType> variableTypes = new LinkedHashMap<>();
 
     private Catalog.Entity entity;
 
-    private Resolver(Catalog catalog, Options options, Backend backend) {
+    private Resolver(Catalog catalog, Options options, QueryTranslator translator) {
         this.catalog = catalog;
         this.options = options;
-        this.backend = backend;
+        this.translator = translator;
     }
 
     public record Result(Tam.Query query, Map<String, TaqlType> variables) {}
 
-    public static Result resolve(Catalog catalog, Ast.Query parsed, Options options, Backend backend) {
-        Resolver r = new Resolver(catalog, options, backend);
+    public static Result resolve(Catalog catalog, Ast.Query parsed, Options options, QueryTranslator translator) {
+        Resolver r = new Resolver(catalog, options, translator);
         Tam.Query query = r.statement(parsed.stmt());
         r.checkAllVariablesTyped();
         if (!r.errors.isEmpty()) throw new TaqlException(r.errors);
@@ -201,12 +201,12 @@ public final class Resolver {
     private Tam.Expr limit(Ast.Top top) {
         if (top == null) {
             return options.defaultRowLimit() > 0
-                    ? new Tam.Constant((long) options.defaultRowLimit(), TaqlType.INTEGER, backend.defaultTypeFor(TaqlType.INTEGER))
+                    ? new Tam.Constant((long) options.defaultRowLimit(), TaqlType.INTEGER, translator.defaultTypeFor(TaqlType.INTEGER))
                     : null;
         }
         return switch (top.count()) {
-            case Ast.Lit l -> new Tam.LiteralRef(l.slot(), TaqlType.INTEGER, backend.defaultTypeFor(TaqlType.INTEGER));
-            case Ast.Param p -> variable(p, TaqlType.INTEGER, backend.defaultTypeFor(TaqlType.INTEGER));
+            case Ast.Lit l -> new Tam.LiteralRef(l.slot(), TaqlType.INTEGER, translator.defaultTypeFor(TaqlType.INTEGER));
+            case Ast.Param p -> variable(p, TaqlType.INTEGER, translator.defaultTypeFor(TaqlType.INTEGER));
             default -> throw fail(top.pos(), Diagnostic.Phase.TYPE, "'top' expects a number or a $variable");
         };
     }
@@ -350,7 +350,7 @@ public final class Resolver {
                 if (subject.type().kind() != TaqlType.Kind.STRING) {
                     error(l.pos(), Diagnostic.Phase.TYPE, "'like' needs a text field but got " + subject.type());
                 }
-                yield new Tam.Like(subject, coerce(expr(l.pattern(), false), TaqlType.STRING, backend.defaultTypeFor(TaqlType.STRING), l.pos()),
+                yield new Tam.Like(subject, coerce(expr(l.pattern(), false), TaqlType.STRING, translator.defaultTypeFor(TaqlType.STRING), l.pos()),
                         l.negated());
             }
         };
@@ -626,10 +626,10 @@ public final class Resolver {
 
     /**
      * Fallback physical type for a value with no column to take one from. What
-     * counts as reasonable is the target store's business, so it answers.
+     * counts as reasonable is the target language's business, so it answers.
      */
     private PhysicalType sqlTypeFor(TaqlType type) {
-        return backend.defaultTypeFor(type);
+        return translator.defaultTypeFor(type);
     }
 
     // ------------------------------------------------------------------

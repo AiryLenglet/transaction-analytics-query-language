@@ -1,6 +1,6 @@
 package ch.lenglet.taql.sql;
 
-import ch.lenglet.taql.Backend;
+import ch.lenglet.taql.QueryTranslator;
 import ch.lenglet.taql.PhysicalType;
 import ch.lenglet.taql.TaqlType;
 import ch.lenglet.taql.catalog.Catalog;
@@ -27,7 +27,7 @@ import java.util.Set;
  * Nothing user-supplied is ever concatenated into the text: identifiers come
  * from the catalog, operators from a closed set, and values only ever as '?'.
  */
-public final class SqlServerGenerator implements Backend {
+public final class SqlServerGenerator implements QueryTranslator {
 
     // Aliases the generator gives its own levels. They must differ from each
     // other -- all three can nest in one statement -- and no table may be given
@@ -72,7 +72,7 @@ public final class SqlServerGenerator implements Backend {
     }
 
     @Override
-    public Plan generate(Tam.Query query, Map<String, TaqlType> variables, String shapeKey) {
+    public Plan translate(Tam.Query query, Map<String, TaqlType> variables, String shapeKey) {
         // Emission state is per statement, so each call builds its own
         // generator: the instance a compiler holds stays stateless and shared.
         SqlServerGenerator emission = new SqlServerGenerator();

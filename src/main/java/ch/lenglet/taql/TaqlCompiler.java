@@ -53,7 +53,7 @@ public final class TaqlCompiler {
     private static final Logger log = LoggerFactory.getLogger(TaqlCompiler.class);
 
     private final Catalog catalog;
-    private final Backend backend;
+    private final QueryTranslator translator;
     private final TaqlParser parser;
     private final Resolver.Options options;
     private final PlanCache<String, Compiled> textCache;
@@ -68,13 +68,13 @@ public final class TaqlCompiler {
     }
 
     /**
-     * @param backend where these queries will run. One compiler serves one
-     *                backend: the shape key describes the query, not the target,
-     *                so two backends sharing a cache would collide on it.
+     * @param translator the language these queries are written into. One compiler
+     *                   serves one translator: the shape key describes the query,
+     *                   not the target, so two sharing a cache would collide.
      */
-    public TaqlCompiler(Catalog catalog, Backend backend, Resolver.Options options,
+    public TaqlCompiler(Catalog catalog, QueryTranslator translator, Resolver.Options options,
                         int textCacheSize, int shapeCacheSize) {
-        this(catalog, backend, new TaqlParser(), options,
+        this(catalog, translator, new TaqlParser(), options,
                 new LruPlanCache<>(textCacheSize), new LruPlanCache<>(shapeCacheSize));
     }
 
@@ -91,10 +91,10 @@ public final class TaqlCompiler {
      *                   {@link TaqlQuery#toString()}.
      * @param shapeCache keyed on the shape, which is value-free by construction.
      */
-    public TaqlCompiler(Catalog catalog, Backend backend, TaqlParser parser, Resolver.Options options,
+    public TaqlCompiler(Catalog catalog, QueryTranslator translator, TaqlParser parser, Resolver.Options options,
                         PlanCache<String, Compiled> textCache, PlanCache<String, Plan> shapeCache) {
         this.catalog = catalog;
-        this.backend = backend;
+        this.translator = translator;
         this.parser = parser;
         this.options = options;
         this.textCache = textCache;
@@ -123,8 +123,8 @@ public final class TaqlCompiler {
         return textCache.get(source, text -> {
             Ast.Query parsed = parser.parse(text);
             Plan plan = shapeCache.get(parsed.shapeKey(), shape -> {
-                Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, backend);
-                Plan generated = backend.generate(resolved.query(), resolved.variables(), shape);
+                Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, translator);
+                Plan generated = translator.translate(resolved.query(), resolved.variables(), shape);
                 log.debug("plan {} compiled, {} parameters\n{}",
                         generated.id(), generated.parameters().size(), generated.statement().stripTrailing());
                 log.trace("plan {} has shape {}", generated.id(), shape);
@@ -137,12 +137,12 @@ public final class TaqlCompiler {
     /** Parses and type-checks without consulting either cache -- for validation endpoints and tests. */
     public Plan compileUncached(String source) {
         Ast.Query parsed = parser.parse(source);
-        Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, backend);
-        return backend.generate(resolved.query(), resolved.variables(), parsed.shapeKey());
+        Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, translator);
+        return translator.translate(resolved.query(), resolved.variables(), parsed.shapeKey());
     }
 
     public Tam.Query analyse(String source) {
-        return Resolver.resolve(catalog, parser.parse(source), options, backend).query();
+        return Resolver.resolve(catalog, parser.parse(source), options, translator).query();
     }
 
     public PlanCache<String, Compiled> textCache() {
@@ -157,7 +157,7 @@ public final class TaqlCompiler {
         return catalog;
     }
 
-    public Backend backend() {
-        return backend;
+    public QueryTranslator translator() {
+        return translator;
     }
 }
