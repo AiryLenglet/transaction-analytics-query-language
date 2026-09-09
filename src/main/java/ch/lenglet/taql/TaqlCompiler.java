@@ -2,6 +2,7 @@ package ch.lenglet.taql;
 
 import ch.lenglet.taql.ast.Ast;
 import ch.lenglet.taql.ast.TaqlParserFacade;
+import ch.lenglet.taql.cache.LruPlanCache;
 import ch.lenglet.taql.cache.PlanCache;
 import ch.lenglet.taql.catalog.Catalog;
 import ch.lenglet.taql.plan.Plan;
@@ -72,11 +73,27 @@ public final class TaqlCompiler {
      */
     public TaqlCompiler(Catalog catalog, Backend backend, Resolver.Options options,
                         int textCacheSize, int shapeCacheSize) {
+        this(catalog, backend, options,
+                new LruPlanCache<>(textCacheSize), new LruPlanCache<>(shapeCacheSize));
+    }
+
+    /**
+     * Takes the caches themselves, so a deployment can supply Caffeine-backed
+     * ones -- or a no-op pair, when compiling every time is preferable to
+     * holding query text in memory.
+     *
+     * @param textCache  keyed on exact source, so it holds the literal values
+     *                   that came with the query. That is client data; see
+     *                   {@link TaqlQuery#toString()}.
+     * @param shapeCache keyed on the shape, which is value-free by construction.
+     */
+    public TaqlCompiler(Catalog catalog, Backend backend, Resolver.Options options,
+                        PlanCache<String, Compiled> textCache, PlanCache<String, Plan> shapeCache) {
         this.catalog = catalog;
         this.backend = backend;
         this.options = options;
-        this.textCache = new PlanCache<>(textCacheSize);
-        this.shapeCache = new PlanCache<>(shapeCacheSize);
+        this.textCache = textCache;
+        this.shapeCache = shapeCache;
     }
 
     /** A plan together with the literal values of the specific query text it came from. */

@@ -302,6 +302,9 @@ Deliberate omissions for a POC, roughly in the order I would add them:
   the plan, would.
 - **Multi-entity.** `from` is wired through and the catalog is a map, but only
   one entity is defined and there is no cross-entity join planning.
-- **Caffeine** instead of the hand-rolled LRU, for per-entry stats and
-  non-blocking reads. `PlanCache` computes outside the lock, so a race compiles
-  the same plan twice and discards one — harmless, but not free.
+- **Caffeine** instead of the hand-rolled LRU, for per-entry stats,
+  size-aware eviction and non-blocking reads. `PlanCache` is now an interface
+  and `TaqlCompiler` takes the caches, so this is a dependency and an adapter
+  rather than a change to the compiler. `LruPlanCache` computes outside its
+  lock, so a race compiles the same plan twice and discards one — harmless, but
+  not free.

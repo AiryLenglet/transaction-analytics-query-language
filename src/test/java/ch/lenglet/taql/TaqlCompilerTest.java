@@ -1,5 +1,6 @@
 package ch.lenglet.taql;
 
+import ch.lenglet.taql.cache.PlanCache;
 import ch.lenglet.taql.catalog.Catalog;
 import ch.lenglet.taql.catalog.DemoCatalog;
 import ch.lenglet.taql.sql.SqlType;
@@ -15,6 +16,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -525,7 +527,7 @@ class TaqlCompilerTest {
             assertAll(
                     () -> assertSame(a, b, "same shape must reuse the same Plan instance"),
                     () -> assertEquals(a.shapeKey(), b.shapeKey()),
-                    () -> assertEquals(1, compiler.shapeCache().size()));
+                    () -> assertEquals(1, compiler.shapeCache().stats().size()));
         }
 
         @Test
@@ -578,18 +580,18 @@ class TaqlCompilerTest {
                     }
                     over {   clientId  =  '1'   }
                     """);
-            assertEquals(1, compiler.shapeCache().size());
-            assertEquals(2, compiler.textCache().size());
+            assertEquals(1, compiler.shapeCache().stats().size());
+            assertEquals(2, compiler.textCache().stats().size());
         }
 
         @Test
         void identicalTextSkipsParsingEntirely() {
             String source = "list { transactionId } over { clientId = '1' }";
             compiler.compile(source);
-            long missesBefore = compiler.textCache().misses();
+            long missesBefore = compiler.textCache().stats().misses();
             compiler.compile(source);
-            assertEquals(missesBefore, compiler.textCache().misses());
-            assertEquals(1, compiler.textCache().hits());
+            assertEquals(missesBefore, compiler.textCache().stats().misses());
+            assertEquals(1, compiler.textCache().stats().hits());
         }
 
         @Test
@@ -638,6 +640,49 @@ class TaqlCompilerTest {
                     "list { TransactionId } over { TransactionValue > 500 } top 5").plan().shapeKey();
             assertTrue(key.contains("#0"), key);
             assertTrue(key.contains("#1"), key);
+        }
+
+        @Test
+        void aCompilerWorksWithACacheThatNeverCaches() {
+            // Caching is an optimisation, not part of the semantics: swapping in
+            // a cache that stores nothing must change speed and nothing else.
+            // Worth pinning, because the one serious bug this codebase had was a
+            // cache handing one query another query's values.
+            TaqlCompiler uncached = new TaqlCompiler(DemoCatalog.create(),
+                    new ch.lenglet.taql.sql.SqlServerGenerator(), Resolver.Options.DEFAULTS,
+                    new NeverCaches<>(), new NeverCaches<>());
+
+            String query = "list { TransactionId } over { TransactionValue > 500 } top 5";
+            var first = uncached.compile(query);
+            var second = uncached.compile(query);
+
+            assertAll(
+                    () -> assertEquals(List.of(5L, new java.math.BigDecimal("500")), first.bind()),
+                    () -> assertEquals(first.bind(), second.bind()),
+                    () -> assertEquals(first.plan().statement(), second.plan().statement()),
+                    // ...and it really did compile twice
+                    () -> assertNotSame(first.plan(), second.plan()));
+        }
+
+        @Test
+        void theDefaultCacheReportsWhatItDid() {
+            compiler.compile("list { transactionId } over { clientId = '1' }");
+            compiler.compile("list { transactionId } over { clientId = '1' }");
+            PlanCache.Stats stats = compiler.textCache().stats();
+            assertAll(
+                    () -> assertEquals(1, stats.hits()),
+                    () -> assertEquals(1, stats.misses()),
+                    () -> assertEquals(1, stats.size()),
+                    () -> assertEquals(0.5, stats.hitRate()));
+        }
+
+        /** Correct, useless, and enough to prove the seam is real. */
+        private static final class NeverCaches<K, V> implements PlanCache<K, V> {
+            @Override public V get(K key, java.util.function.Function<K, V> compute) {
+                return compute.apply(key);
+            }
+            @Override public void clear() { }
+            @Override public Stats stats() { return new Stats(0, 0, 0); }
         }
     }
 
