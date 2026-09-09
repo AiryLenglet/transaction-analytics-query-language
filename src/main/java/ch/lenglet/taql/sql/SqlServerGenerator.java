@@ -2,7 +2,6 @@ package ch.lenglet.taql.sql;
 
 import ch.lenglet.taql.Backend;
 import ch.lenglet.taql.PhysicalType;
-import ch.lenglet.taql.SqlType;
 import ch.lenglet.taql.TaqlType;
 import ch.lenglet.taql.catalog.Catalog;
 import ch.lenglet.taql.plan.Plan;

@@ -1,4 +1,6 @@
-package ch.lenglet.taql.runtime;
+package ch.lenglet.taql.runtime.jdbc;
+
+import ch.lenglet.taql.runtime.FailureCategory;
 
 import java.sql.SQLException;
 import java.util.Set;
@@ -29,58 +31,9 @@ import java.util.Set;
  *       40 = transaction rollback, HY008 = cancelled.</li>
  * </ul>
  */
-public enum SqlFailure {
+public final class SqlFailure {
 
-    /**
-     * Deadlock victim, snapshot conflict, dropped connection. A retry may well
-     * succeed. The message stays generic across all of those: a caller cannot
-     * act on the difference between a lock conflict and a network drop, and the
-     * distinction is in the log where an operator can see it.
-     */
-    RETRYABLE(true, "The query did not complete and may succeed if retried."),
-
-    /** The server is short of memory, tempdb or log space. Retry, but back off first. */
-    RESOURCE(true, "The database is temporarily out of resources."),
-
-    /** The query ran too long and was cancelled. Retrying the same query will do the same thing. */
-    TIMEOUT(false, "The query took too long and was cancelled."),
-
-    /** Overflow, divide by zero, a value that would not convert. Caused by the request or the data. */
-    INVALID_DATA(false, "A value in this query could not be processed by the database."),
-
-    /**
-     * The catalog describes a table or column the database does not have. This
-     * is a deployment fault, not a caller fault, and no retry will fix it.
-     */
-    SCHEMA_MISMATCH(false, "This query cannot be served against the current database schema."),
-
-    /** The connection's login may not read what the query asked for. */
-    PERMISSION(false, "This query is not permitted."),
-
-    /** Unrecognised. Treat as a server fault and look at the logs. */
-    UNKNOWN(false, "The query could not be completed.");
-
-    private final boolean worthRetrying;
-    private final String safeMessage;
-
-    SqlFailure(boolean worthRetrying, String safeMessage) {
-        this.worthRetrying = worthRetrying;
-        this.safeMessage = safeMessage;
-    }
-
-    /** True if the same query, run again, might succeed. */
-    public boolean worthRetrying() {
-        return worthRetrying;
-    }
-
-    /**
-     * A message safe to return over HTTP: it names no table, column or value.
-     * Server messages can quote both schema and data, so they belong in the log,
-     * not in the response.
-     */
-    public String safeMessage() {
-        return safeMessage;
-    }
+    private SqlFailure() {}
 
     // SQL Server error numbers -- see sys.messages.
     private static final Set<Integer> RETRYABLE_CODES = Set.of(
@@ -129,37 +82,37 @@ public enum SqlFailure {
      * recognise. mssql-jdbc often reports the useful code on a linked exception
      * rather than the one thrown, so stopping at the head would lose it.
      */
-    public static SqlFailure classify(SQLException exception) {
+    public static FailureCategory classify(SQLException exception) {
         for (SQLException e = exception; e != null; e = e.getNextException()) {
-            SqlFailure classified = classifyOne(e);
-            if (classified != UNKNOWN) return classified;
+            FailureCategory classified = classifyOne(e);
+            if (classified != FailureCategory.UNKNOWN) return classified;
         }
-        return UNKNOWN;
+        return FailureCategory.UNKNOWN;
     }
 
-    private static SqlFailure classifyOne(SQLException e) {
+    private static FailureCategory classifyOne(SQLException e) {
         int code = e.getErrorCode();
         if (code != 0) {
-            if (RETRYABLE_CODES.contains(code)) return RETRYABLE;
-            if (RESOURCE_CODES.contains(code)) return RESOURCE;
-            if (INVALID_DATA_CODES.contains(code)) return INVALID_DATA;
-            if (SCHEMA_CODES.contains(code)) return SCHEMA_MISMATCH;
-            if (PERMISSION_CODES.contains(code)) return PERMISSION;
+            if (RETRYABLE_CODES.contains(code)) return FailureCategory.RETRYABLE;
+            if (RESOURCE_CODES.contains(code)) return FailureCategory.RESOURCE;
+            if (INVALID_DATA_CODES.contains(code)) return FailureCategory.INVALID_DATA;
+            if (SCHEMA_CODES.contains(code)) return FailureCategory.SCHEMA_MISMATCH;
+            if (PERMISSION_CODES.contains(code)) return FailureCategory.PERMISSION;
         }
 
         // Driver-side failures report code 0; the SQLState class is what carries
         // the meaning, and its first two characters are standard.
         String state = e.getSQLState();
-        if (state == null || state.length() < 2) return UNKNOWN;
+        if (state == null || state.length() < 2) return FailureCategory.UNKNOWN;
         return switch (state.substring(0, 2)) {
-            case "08" -> RETRYABLE;        // connection exception
-            case "40" -> RETRYABLE;        // transaction rollback (deadlock arrives as 40001)
-            case "53" -> RESOURCE;         // insufficient resources
-            case "22" -> INVALID_DATA;     // data exception
-            case "42" -> SCHEMA_MISMATCH;  // syntax error or access rule violation
-            case "28" -> PERMISSION;       // invalid authorization
-            case "HY" -> "HY008".equals(state) ? TIMEOUT : UNKNOWN;
-            default -> UNKNOWN;
+            case "08" -> FailureCategory.RETRYABLE;        // connection exception
+            case "40" -> FailureCategory.RETRYABLE;        // transaction rollback (deadlock arrives as 40001)
+            case "53" -> FailureCategory.RESOURCE;         // insufficient resources
+            case "22" -> FailureCategory.INVALID_DATA;     // data exception
+            case "42" -> FailureCategory.SCHEMA_MISMATCH;  // syntax error or access rule violation
+            case "28" -> FailureCategory.PERMISSION;       // invalid authorization
+            case "HY" -> "HY008".equals(state) ? FailureCategory.TIMEOUT : FailureCategory.UNKNOWN;
+            default -> FailureCategory.UNKNOWN;
         };
     }
 }

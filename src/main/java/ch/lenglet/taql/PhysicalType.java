@@ -11,7 +11,7 @@ package ch.lenglet.taql;
  * The typed model and the plan have to <em>carry</em> a physical type, because
  * a parameter must be sent as the thing the column actually is -- that is the
  * difference between seeking an index and converting every row. But they have
- * no business knowing whose vocabulary it is: naming {@link SqlType} in
+ * no business knowing whose vocabulary it is: naming {@code SqlType} in
  * {@code Tam} put T-SQL in the middle of a pipeline whose whole point is that
  * only its last stage is dialect-specific.
  *

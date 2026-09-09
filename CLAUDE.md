@@ -40,9 +40,12 @@ text → TaqlParserFacade (ANTLR)  → parse tree
      → AstBuilder                → Ast          untyped syntax model, LITERALS LIFTED OUT
      → Resolver (+ Catalog)      → Tam          typed, resolved, store-agnostic
      → Backend.generate          → Plan         statement text + parameter recipe
-     → Binder                    → JDBC values
-     → TaqlTemplate              → List<Map<String,Object>>
+     → PlanRunner.run            → List<Map<String,Object>>
 ```
+
+`TaqlTemplate` is the API and names no store: it compiles, binds, and retries what a `FailureCategory` says is worth retrying. The two seams either side of it are `Backend` (query → statement, pure and shareable) and `PlanRunner` (statement → rows, holds the connection). They are separate because a compiler must not need a live connection — a validation endpoint has no database.
+
+The packages say which is which. `ch.lenglet.taql.runtime` is store-neutral; `runtime.jdbc` holds `JdbcPlanRunner`, `Binder` and `SqlFailure`; `ch.lenglet.taql.sql` holds `SqlServerGenerator` and `SqlType`. `grep -rl 'java.sql\|javax.sql\|SqlType' src/main/java` should return only those two packages, `DemoCatalog` and `Main`.
 
 Everything above `Backend` is store-agnostic and must stay that way: `Tam` and `Plan` carry a `PhysicalType`, never a `SqlType`. `Backend` is the single seam where a query becomes T-SQL — it supplies both the statement and the default physical type for a value no column has typed, which is why the resolver takes one. `SqlServerGenerator` is the only implementation; `grep -l SqlType src/main/java` shows exactly which files are dialect-specific, and that list should not grow.
 
@@ -111,7 +114,7 @@ The resolver **collects** diagnostics rather than failing on the first, then thr
 
 ## Runtime error handling
 
-`SqlFailure.classify` maps `SQLException` to a category (RETRYABLE / RESOURCE / TIMEOUT / INVALID_DATA / SCHEMA_MISMATCH / PERMISSION). Three rules that the codes in `README.md` were derived from empirically:
+`FailureCategory` is the neutral vocabulary (RETRYABLE / RESOURCE / TIMEOUT / INVALID_DATA / SCHEMA_MISMATCH / PERMISSION); `jdbc.SqlFailure.classify` maps `SQLException` onto it. A deadlock and a permission refusal are facts about running a query anywhere — only the codes that identify them are dialect-specific, which is why retrying lives in `TaqlTemplate` and classifying lives in the runner. Three rules that the codes in `README.md` were derived from empirically:
 
 - **Never branch on exception subclass** — mssql-jdbc throws plain `SQLServerException` for essentially everything.
 - **Never match on message text** — server messages are localised.

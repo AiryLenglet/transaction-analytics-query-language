@@ -2,6 +2,7 @@ package ch.lenglet.taql;
 
 import ch.lenglet.taql.catalog.DemoCatalog;
 import ch.lenglet.taql.runtime.TaqlTemplate;
+import ch.lenglet.taql.runtime.jdbc.JdbcPlanRunner;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -31,8 +32,8 @@ class TaqlTemplateTest {
     private final TaqlCompiler compiler = new TaqlCompiler(DemoCatalog.create());
 
     private TaqlTemplate templateOver(int availableRows, int maxRows) {
-        return new TaqlTemplate(compiler, sourceOf(availableRows),
-                new TaqlTemplate.Options(30, 3, 50, maxRows, 1_000));
+        return new TaqlTemplate(compiler,
+                new JdbcPlanRunner(sourceOf(availableRows), new JdbcPlanRunner.Options(30, maxRows, 1_000)));
     }
 
     private static final TaqlQuery QUERY =
@@ -59,8 +60,8 @@ class TaqlTemplateTest {
 
     @Test
     void theCeilingCannotBeConfiguredAway() {
-        assertThrows(IllegalArgumentException.class, () -> new TaqlTemplate.Options(30, 3, 50, 0, 1_000));
-        assertThrows(IllegalArgumentException.class, () -> new TaqlTemplate.Options(30, 3, 50, -1, 1_000));
+        assertThrows(IllegalArgumentException.class, () -> new JdbcPlanRunner.Options(30, 0, 1_000));
+        assertThrows(IllegalArgumentException.class, () -> new JdbcPlanRunner.Options(30, -1, 1_000));
     }
 
     // ------------------------------------------------------------------

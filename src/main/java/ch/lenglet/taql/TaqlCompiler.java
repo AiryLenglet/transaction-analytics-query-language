@@ -5,7 +5,7 @@ import ch.lenglet.taql.ast.TaqlParserFacade;
 import ch.lenglet.taql.cache.PlanCache;
 import ch.lenglet.taql.catalog.Catalog;
 import ch.lenglet.taql.plan.Plan;
-import ch.lenglet.taql.runtime.Binder;
+import ch.lenglet.taql.runtime.jdbc.Binder;
 import ch.lenglet.taql.sem.Resolver;
 import ch.lenglet.taql.sem.Tam;
 import ch.lenglet.taql.sql.SqlServerGenerator;

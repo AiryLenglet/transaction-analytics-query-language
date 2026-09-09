@@ -268,8 +268,8 @@ Bounds a deployment sets, none of them part of the language:
 |---|---|---|
 | query length | 8192 characters | `TaqlParserFacade.Limits` |
 | nesting depth | 256 levels | `TaqlParserFacade.Limits`, enforced as the AST is built |
-| rows returned | 10 000 | `TaqlTemplate.Options` |
-| statement timeout | 30 s | `TaqlTemplate.Options` |
+| rows returned | 10 000 | `JdbcPlanRunner.Options` |
+| statement timeout | 30 s | `JdbcPlanRunner.Options` |
 
 Exceeding one is a `limit` diagnostic, positioned like any other. The nesting
 bound is what protects the stack: the resolver, the printer and the SQL
@@ -296,7 +296,7 @@ Deliberate omissions for a POC, roughly in the order I would add them:
   caller's own) belong as a mandatory predicate injected at lowering.
 - **Circuit breaking.** Retries are bounded per request but nothing sheds load
   when the database is failing for everyone at once.
-- **Cost control.** `TaqlTemplate` caps rows and every statement is bounded by
+- **Cost control.** `JdbcPlanRunner` caps rows and every statement is bounded by
   a timeout, but nothing stops `count(distinct x)` over an unfiltered table
   before it runs; a required-filter rule per entity, and a cost estimate from
   the plan, would.

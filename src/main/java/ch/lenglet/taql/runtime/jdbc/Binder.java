@@ -1,8 +1,8 @@
-package ch.lenglet.taql.runtime;
+package ch.lenglet.taql.runtime.jdbc;
 
 import ch.lenglet.taql.Diagnostic;
 import ch.lenglet.taql.TaqlException;
-import ch.lenglet.taql.SqlType;
+import ch.lenglet.taql.sql.SqlType;
 import ch.lenglet.taql.TaqlType;
 import ch.lenglet.taql.plan.Plan;
 

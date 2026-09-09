@@ -3,7 +3,7 @@ package ch.lenglet.taql;
 import ch.lenglet.taql.ast.Ast;
 import ch.lenglet.taql.ast.TaqlParserFacade;
 import ch.lenglet.taql.catalog.DemoCatalog;
-import ch.lenglet.taql.runtime.SqlFailure;
+import ch.lenglet.taql.runtime.jdbc.SqlFailure;
 import ch.lenglet.taql.runtime.TaqlExecutionException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -73,11 +73,12 @@ class CidTest {
         SQLException quotesTheValue = new SQLException(
                 "Conversion failed when converting the varchar value '" + CID + "' to data type int",
                 "22018", 245);
-        var failure = new TaqlExecutionException(SqlFailure.classify(quotesTheValue), quotesTheValue, 1);
+        var failure = new TaqlExecutionException(SqlFailure.classify(quotesTheValue),
+                quotesTheValue.getErrorCode() + "/" + quotesTheValue.getSQLState(), quotesTheValue, 1);
 
         assertFalse(failure.logDetail().contains(CID), failure.logDetail());
         assertFalse(failure.getMessage().contains(CID), failure.getMessage());
-        assertTrue(failure.logDetail().contains("errorNumber=245"), failure.logDetail());
+        assertTrue(failure.logDetail().contains("code=245/22018"), failure.logDetail());
         // Still reachable for a deployment that has decided where it may go.
         assertTrue(failure.databaseMessage().contains(CID));
     }

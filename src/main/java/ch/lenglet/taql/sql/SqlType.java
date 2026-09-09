@@ -1,4 +1,7 @@
-package ch.lenglet.taql;
+package ch.lenglet.taql.sql;
+
+import ch.lenglet.taql.PhysicalType;
+import ch.lenglet.taql.TaqlType;
 
 import java.sql.Types;
 

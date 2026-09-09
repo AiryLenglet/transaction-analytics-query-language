@@ -6,6 +6,7 @@ import ch.lenglet.taql.TaqlQuery;
 import ch.lenglet.taql.catalog.DemoCatalog;
 import ch.lenglet.taql.runtime.TaqlExecutionException;
 import ch.lenglet.taql.runtime.TaqlTemplate;
+import ch.lenglet.taql.runtime.jdbc.JdbcPlanRunner;
 import com.zaxxer.hikari.HikariDataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,7 +49,8 @@ public final class Main {
         TaqlTemplate template;
         try (HikariDataSource dataSource = dataSource()) {
             initialiseSchema(dataSource);
-            template = new TaqlTemplate(new TaqlCompiler(DemoCatalog.create()), dataSource);
+            template = new TaqlTemplate(new TaqlCompiler(DemoCatalog.create()),
+                    new JdbcPlanRunner(dataSource));
 
             List<String> queries = loadExamples();
             for (int i = 0; i < queries.size(); i++) {

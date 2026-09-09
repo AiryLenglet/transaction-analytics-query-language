@@ -2,7 +2,7 @@ package ch.lenglet.taql;
 
 import ch.lenglet.taql.catalog.Catalog;
 import ch.lenglet.taql.catalog.DemoCatalog;
-import ch.lenglet.taql.SqlType;
+import ch.lenglet.taql.sql.SqlType;
 import ch.lenglet.taql.plan.Plan;
 import ch.lenglet.taql.sem.Resolver;
 import org.junit.jupiter.api.DisplayName;
