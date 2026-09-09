@@ -38,6 +38,15 @@ public record Plan(String sql,
         variables = Collections.unmodifiableMap(new LinkedHashMap<>(variables));
     }
 
+    /**
+     * Short, stable identifier for logs. Correlates the line that compiled a
+     * plan with every line that runs it, without repeating the shape key -- which
+     * is long, and belongs in a log at most once per plan.
+     */
+    public String id() {
+        return Integer.toHexString(shapeKey.hashCode());
+    }
+
     public record Column(String name, TaqlType type) {}
 
     /** Where one bound parameter's value comes from. */

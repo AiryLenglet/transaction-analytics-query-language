@@ -2,8 +2,12 @@ package ch.lenglet.taql.runtime;
 
 import ch.lenglet.taql.Diagnostic;
 import ch.lenglet.taql.TaqlCompiler;
+import ch.lenglet.taql.TaqlQuery;
 import ch.lenglet.taql.TaqlException;
 import ch.lenglet.taql.plan.Plan;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -17,7 +21,12 @@ import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * Runs a compiled plan. The only place JDBC appears.
+ * Runs TAQL queries. The only place JDBC appears.
+ *
+ * <p>Named for {@code JdbcTemplate}, and for the same reason: it owns a
+ * resource. Compiling needs no database, so it stays on {@link TaqlCompiler}
+ * -- a validation or schema endpoint has no business holding a DataSource.
+ * Share one compiler between the two; it owns both plan caches.
  *
  * <h2>Error handling</h2>
  * Compilation has already ruled out malformed and mistyped queries, so a
@@ -41,7 +50,7 @@ import java.util.concurrent.ThreadLocalRandom;
  *       and the raw detail for the log.</li>
  * </ul>
  */
-public final class TaqlExecutor {
+public final class TaqlTemplate {
 
     /**
      * @param queryTimeoutSeconds per-statement timeout; 0 disables it, which is
@@ -72,55 +81,68 @@ public final class TaqlExecutor {
         }
     }
 
+    /**
+     * Log lines carry {@link Plan#id()}, which correlates them with the line
+     * that compiled the plan and with its SQL. Bound values never appear -- see
+     * TaqlCompiler for why.
+     */
+    private static final Logger log = LoggerFactory.getLogger(TaqlTemplate.class);
+
     private final TaqlCompiler compiler;
     private final DataSource dataSource;
     private final Options options;
 
-    public TaqlExecutor(TaqlCompiler compiler, DataSource dataSource) {
+    public TaqlTemplate(TaqlCompiler compiler, DataSource dataSource) {
         this(compiler, dataSource, Options.DEFAULTS);
     }
 
-    public TaqlExecutor(TaqlCompiler compiler, DataSource dataSource, Options options) {
+    public TaqlTemplate(TaqlCompiler compiler, DataSource dataSource, Options options) {
         this.compiler = compiler;
         this.dataSource = dataSource;
         this.options = options;
     }
 
-    public record Rows(List<Plan.Column> columns, List<Map<String, Object>> rows) {}
-
-    public Rows run(String source) {
-        return run(source, Map.of());
-    }
-
     /**
-     * Compiles and runs {@code source}.
+     * Compiles and runs {@code query}.
      *
-     * @throws ch.lenglet.taql.TaqlException  the query is invalid -- a 400, with
-     *                                        diagnostics that are safe to return
+     * Rows are keyed by output name, in the order the query projects them, so
+     * they serialise directly to the JSON an API returns. The column types are
+     * a property of the query rather than of its result, so they live on the
+     * {@link Plan} -- ask the compiler, which answers without a database and
+     * answers for an empty result too.
+     *
+     * @throws ch.lenglet.taql.TaqlException  the query is invalid, or asks for
+     *                                        more rows than the ceiling allows
+     *                                        -- a 400, with diagnostics that are
+     *                                        safe to return
      * @throws TaqlExecutionException         the query is valid but did not run
      */
-    public Rows run(String source, Map<String, Object> variables) {
-        TaqlCompiler.Compiled compiled = compiler.compile(source);
+    public List<Map<String, Object>> execute(TaqlQuery query) {
+        TaqlCompiler.Compiled compiled = compiler.compile(query.source());
         Plan plan = compiled.plan();
-        List<Object> values = compiled.bind(variables);
+        List<Object> values = compiled.bind(query.variables());
 
         SQLException last = null;
         for (int attempt = 1; attempt <= options.maxAttempts(); attempt++) {
             try {
-                return execute(plan, values);
+                return run(plan, values);
             } catch (SQLException e) {
                 last = e;
                 SqlFailure failure = SqlFailure.classify(e);
                 if (!failure.worthRetrying() || attempt == options.maxAttempts()) {
-                    throw new TaqlExecutionException(failure, e, attempt);
+                    TaqlExecutionException giveUp = new TaqlExecutionException(failure, e, attempt);
+                    log.error("query failed: {}", giveUp.logDetail());
+                    throw giveUp;
                 }
+                log.warn("attempt {} of {} failed as {} (error {}, state {}); retrying",
+                        attempt, options.maxAttempts(), failure, e.getErrorCode(), e.getSQLState());
                 backoff(attempt, e);
             }
         }
         throw new TaqlExecutionException(SqlFailure.classify(last), last, options.maxAttempts());
     }
 
-    private Rows execute(Plan plan, List<Object> values) throws SQLException {
+    private List<Map<String, Object>> run(Plan plan, List<Object> values) throws SQLException {
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(plan.sql())) {
             // Every TAQL query is a SELECT; saying so lets the driver and any
@@ -133,6 +155,8 @@ public final class TaqlExecutor {
             statement.setMaxRows(options.maxRows() + 1);
             Binder.apply(statement, plan, values);
 
+            log.debug("running plan {} with {} parameters", plan.id(), values.size());
+            long startedAt = System.nanoTime();
             try (ResultSet rs = statement.executeQuery()) {
                 List<Map<String, Object>> rows = new ArrayList<>();
                 while (rs.next()) {
@@ -143,7 +167,9 @@ public final class TaqlExecutor {
                     }
                     rows.add(row);
                 }
-                return new Rows(plan.columns(), rows);
+                log.debug("plan {} returned {} rows in {} ms", plan.id(), rows.size(),
+                        (System.nanoTime() - startedAt) / 1_000_000);
+                return rows;
             }
         }
     }

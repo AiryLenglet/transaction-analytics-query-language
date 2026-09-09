@@ -30,6 +30,26 @@
             <artifactId>HikariCP</artifactId>
             <version>5.1.0</version>
         </dependency>
+        <!--
+            The API only. A library picks a facade, never a binding: whoever
+            embeds this brings their own (Spring Boot brings logback), and two
+            bindings on one classpath is a warning at best.
+        -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.16</version>
+        </dependency>
+        <!--
+            A binding for the demo in Main, and only for that. Runtime scope so
+            nothing compiles against it; an embedder should exclude it.
+        -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>2.0.16</version>
+            <scope>runtime</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

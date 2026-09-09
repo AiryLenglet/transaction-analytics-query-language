@@ -12,8 +12,12 @@ DSL text
   -> T-SQL + parameter recipe  (sql/SqlServerGenerator, plan/Plan)
 ```
 
-Run `mvn compile exec:java` to compile every query in `src/main/resources/example.taql`
-and print its SQL and bindings. Start `./runMsSqlServer.sh` first and it also executes them.
+Run `mvn compile exec:java` to run every query in `src/main/resources/example.taql`
+through a `TaqlTemplate`. Start `./runMsSqlServer.sh` first and the results come
+back too; without it each query still compiles and fails with a classified
+execution error. The generated SQL, plan ids and cache hits arrive as the
+library's own debug logs rather than from the demo — `Main` holds nothing but
+the template.
 
 ## Language
 
@@ -235,7 +239,7 @@ Three things that came out of measuring rather than assuming:
   standard (`08` connection, `40` rollback, `HY008` cancelled). Classification
   needs both.
 
-What `TaqlExecutor` does with that:
+What `TaqlTemplate` does with that:
 
 - **Bounds every statement** with `queryTimeout`. An endpoint that can hold a
   pooled connection indefinitely eventually exhausts the pool and takes down
@@ -246,8 +250,11 @@ What `TaqlExecutor` does with that:
   never retried: it will take just as long again.
 - **Splits the response from the log.** `TaqlExecutionException.getMessage()` is
   a fixed, generic string per category; the server's message can quote table
-  names, column names and row values, so it stays on `databaseMessage()` /
-  `logDetail()`.
+  names, column names and row values — error 245 quotes the offending value
+  back — so it reaches neither the response nor the log. `logDetail()` carries
+  the category, error number, SQL state and attempt count, all of which are
+  value-free; the raw message stays on `databaseMessage()` for a deployment
+  that has decided where such a thing may go.
 
 `SCHEMA_MISMATCH` is worth calling out: 207/208 mean the catalog claims something
 the database does not have. That is a deployment fault, not a caller fault — a
@@ -261,8 +268,8 @@ Bounds a deployment sets, none of them part of the language:
 |---|---|---|
 | query length | 8192 characters | `TaqlParserFacade.Limits` |
 | nesting depth | 256 levels | `TaqlParserFacade.Limits`, enforced as the AST is built |
-| rows returned | 10 000 | `TaqlExecutor.Options` |
-| statement timeout | 30 s | `TaqlExecutor.Options` |
+| rows returned | 10 000 | `TaqlTemplate.Options` |
+| statement timeout | 30 s | `TaqlTemplate.Options` |
 
 Exceeding one is a `limit` diagnostic, positioned like any other. The nesting
 bound is what protects the stack: the resolver, the printer and the SQL
@@ -289,7 +296,7 @@ Deliberate omissions for a POC, roughly in the order I would add them:
   caller's own) belong as a mandatory predicate injected at lowering.
 - **Circuit breaking.** Retries are bounded per request but nothing sheds load
   when the database is failing for everyone at once.
-- **Cost control.** `TaqlExecutor` caps rows and every statement is bounded by
+- **Cost control.** `TaqlTemplate` caps rows and every statement is bounded by
   a timeout, but nothing stops `count(distinct x)` over an unfiltered table
   before it runs; a required-filter rule per entity, and a cost estimate from
   the plan, would.

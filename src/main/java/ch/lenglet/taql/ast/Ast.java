@@ -129,5 +129,16 @@ public final class Ast {
      * The {@code shapeKey} is the canonical rendering of {@code stmt} and is the
      * plan cache key -- it is by construction independent of the literal values.
      */
-    public record Query(Stmt stmt, List<Object> literals, String shapeKey) {}
+    public record Query(Stmt stmt, List<Object> literals, String shapeKey) {
+
+        /**
+         * Carries no literal values. This record is the one place they are all
+         * gathered, so its generated toString would be the easiest accidental
+         * way to log every constant a caller wrote.
+         */
+        @Override
+        public String toString() {
+            return "Query[literals=" + literals.size() + ", shape=" + shapeKey + "]";
+        }
+    }
 }

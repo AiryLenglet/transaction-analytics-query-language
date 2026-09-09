@@ -2,11 +2,13 @@ package ch.lenglet;
 
 import ch.lenglet.taql.TaqlCompiler;
 import ch.lenglet.taql.TaqlException;
+import ch.lenglet.taql.TaqlQuery;
 import ch.lenglet.taql.catalog.DemoCatalog;
-import ch.lenglet.taql.plan.Plan;
 import ch.lenglet.taql.runtime.TaqlExecutionException;
-import ch.lenglet.taql.runtime.TaqlExecutor;
+import ch.lenglet.taql.runtime.TaqlTemplate;
 import com.zaxxer.hikari.HikariDataSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -20,13 +22,21 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Compiles every query in example.taql, prints the generated T-SQL and its
- * bindings, and -- if a SQL Server is reachable -- runs them.
+ * Runs every query in example.taql through a {@link TaqlTemplate}.
+ *
+ * The template is the whole API, so this driver never touches the compiler: the
+ * generated SQL, the plan cache hits and the parameter counts all arrive as
+ * debug logs from the library itself, which is what an operator would see. Turn
+ * them off and the same code prints only results.
  *
  * Run with the database:      ./runMsSqlServer.sh  then  mvn compile exec:java
- * Run without the database:   the SQL and bindings still print.
+ * Run without it:             every query still compiles -- and the compiled SQL
+ *                             is still logged -- then fails with a classified
+ *                             execution error, which is its own demonstration.
  */
 public final class Main {
+
+    private static final Logger log = LoggerFactory.getLogger(Main.class);
 
     private static final Map<String, Object> VARIABLES = new LinkedHashMap<>(Map.of(
             "clients", List.of("1", "3"),
@@ -35,149 +45,59 @@ public final class Main {
             "limit", 10));
 
     public static void main(String[] args) throws Exception {
-        TaqlCompiler compiler = new TaqlCompiler(DemoCatalog.create());
-        List<String> queries = loadExamples();
+        TaqlTemplate template;
+        try (HikariDataSource dataSource = dataSource()) {
+            initialiseSchema(dataSource);
+            template = new TaqlTemplate(new TaqlCompiler(DemoCatalog.create()), dataSource);
 
-        HikariDataSource dataSource = tryConnect();
-        TaqlExecutor executor = dataSource == null ? null : new TaqlExecutor(compiler, dataSource);
-        if (dataSource != null) initialiseSchema(dataSource);
-
-        for (int i = 0; i < queries.size(); i++) {
-            System.out.println("=".repeat(78));
-            System.out.println("QUERY " + (i + 1));
-            System.out.println("=".repeat(78));
-            System.out.println(queries.get(i).strip());
-            System.out.println();
-
-            try {
-                TaqlCompiler.Compiled compiled = compiler.compile(queries.get(i));
-                printPlan(compiled);
-                if (executor != null) printRows(executor.run(queries.get(i), VARIABLES));
-            } catch (TaqlException e) {
-                System.out.println("-- compile error --");
-                e.diagnostics().forEach(d -> System.out.println("  " + d));
-            } catch (TaqlExecutionException e) {
-                // What a service would return, and what it would log.
-                System.out.println("-- execution failed --");
-                System.out.println("  to caller : " + e.getMessage() + "  (retryable: " + e.failure().worthRetrying() + ")");
-                System.out.println("  to log    : " + e.logDetail());
+            List<String> queries = loadExamples();
+            for (int i = 0; i < queries.size(); i++) {
+                log.info("query {} of {}\n{}", i + 1, queries.size(), queries.get(i).strip());
+                run(template, queries.get(i));
             }
-            System.out.println();
+
+            log.info("the same query again -- the compiler logs no new plan, because both caches hit");
+            run(template, queries.getFirst());
+
+            log.info("a hostile value is a value: the payload never reaches the SQL above");
+            run(template, """
+                    list { transactionId }
+                    over { clientId = '1''; DROP TABLE dbo.Transactions; --' }
+                    """);
+
+            log.info("and an identifier the catalog does not know is a compile error");
+            run(template, "list { transactionId } over { Password = 'x' }");
         }
-
-        demonstratePlanCache(compiler, queries);
-        demonstrateInjectionAttempt(compiler);
-
-        if (dataSource != null) dataSource.close();
     }
 
-    // ------------------------------------------------------------------
-
-    private static void printPlan(TaqlCompiler.Compiled compiled) {
-        Plan plan = compiled.plan();
-        System.out.println("-- generated T-SQL --");
-        System.out.println(plan.sql().strip());
-        System.out.println();
-
-        if (!plan.variables().isEmpty()) {
-            System.out.println("-- variables this plan requires --");
-            plan.variables().forEach((name, type) -> System.out.println("  $" + name + " : " + type));
-            System.out.println();
-        }
-
-        System.out.println("-- bound parameters --");
-        List<Object> values;
+    private static void run(TaqlTemplate template, String source) {
         try {
-            values = compiled.bind(VARIABLES);
+            report(template.execute(TaqlQuery.of(source, VARIABLES)));
         } catch (TaqlException e) {
-            System.out.println("  " + e.getMessage());
+            // Everything the caller could have written differently, with a position.
+            e.diagnostics().forEach(d -> log.info("  rejected: {}", d));
+        } catch (TaqlExecutionException e) {
+            // What a service would return, next to what it would log.
+            log.info("  to caller : {} (retryable: {})", e.getMessage(), e.failure().worthRetrying());
+            log.info("  to log    : {}", e.logDetail());
+        }
+    }
+
+    /**
+     * Rows are keyed by output name, so they print themselves. An empty result
+     * has no keys to read, which is the honest cost of the result carrying no
+     * schema -- the shape belongs to the query, and the compiler knows it.
+     */
+    private static void report(List<Map<String, Object>> rows) {
+        if (rows.isEmpty()) {
+            log.info("  no rows");
             return;
         }
-        for (int i = 0; i < plan.parameters().size(); i++) {
-            Plan.ParamSlot slot = plan.parameters().get(i);
-            String origin = switch (slot) {
-                case Plan.Auto a -> "literal #" + a.index();
-                case Plan.Variable v -> "$" + v.name();
-                case Plan.VariableList v -> "$" + v.name() + " (json list)";
-                case Plan.Constant ignored -> "compiler default";
-            };
-            System.out.printf("  ?%-3d %-22s %-12s %s%n",
-                    i + 1, origin, slot.sqlType().sql(), render(values.get(i)));
-        }
-        System.out.println();
-    }
-
-    private static void printRows(TaqlExecutor.Rows result) {
-        System.out.println("-- result (" + result.rows().size() + " rows) --");
-        List<String> names = result.columns().stream().map(Plan.Column::name).toList();
-        System.out.println("  " + String.join(" | ", names));
-        for (Map<String, Object> row : result.rows()) {
-            System.out.println("  " + names.stream()
-                    .map(n -> String.valueOf(row.get(n)))
+        log.info("  {}", String.join(" | ", rows.getFirst().keySet()));
+        for (Map<String, Object> row : rows) {
+            log.info("  {}", row.values().stream().map(String::valueOf)
                     .reduce((a, b) -> a + " | " + b).orElse(""));
         }
-        System.out.println();
-    }
-
-    /** Two queries differing only in their constants must share one plan. */
-    private static void demonstratePlanCache(TaqlCompiler compiler, List<String> queries) {
-        System.out.println("=".repeat(78));
-        System.out.println("PLAN CACHE");
-        System.out.println("=".repeat(78));
-
-        Plan second = compiler.compile(queries.get(1)).plan();
-        Plan third = compiler.compile(queries.get(2)).plan();
-        System.out.println("  query 2 and query 3 differ only in their constants");
-        System.out.println("  same shape key : " + second.shapeKey().equals(third.shapeKey()));
-        System.out.println("  same SQL text  : " + second.sql().equals(third.sql()));
-        System.out.println("  same Plan object (L2 hit) : " + (second == third));
-        System.out.println();
-        System.out.printf("  L1 (exact text) : %d entries, %d hits, %d misses%n",
-                compiler.textCache().size(), compiler.textCache().hits(), compiler.textCache().misses());
-        System.out.printf("  L2 (query shape): %d entries, %d hits, %d misses%n",
-                compiler.shapeCache().size(), compiler.shapeCache().hits(), compiler.shapeCache().misses());
-        System.out.println();
-    }
-
-    /** What a hostile value actually does to the generated SQL: nothing. */
-    private static void demonstrateInjectionAttempt(TaqlCompiler compiler) {
-        System.out.println("=".repeat(78));
-        System.out.println("INJECTION ATTEMPT");
-        System.out.println("=".repeat(78));
-
-        String hostile = """
-                list { transactionId }
-                over { clientId = '1''; DROP TABLE dbo.Transactions; --' }
-                """;
-        TaqlCompiler.Compiled compiled = compiler.compile(hostile);
-        System.out.println(hostile.strip());
-        System.out.println();
-        System.out.println("-- generated T-SQL --");
-        System.out.println(compiled.plan().sql().strip());
-        System.out.println();
-        System.out.println("-- bound parameters --");
-        List<Object> values = compiled.bind();
-        for (int i = 0; i < values.size(); i++) {
-            System.out.println("  ?" + (i + 1) + " = " + render(values.get(i)));
-        }
-        System.out.println();
-        System.out.println("  The payload is a value, never text. It also never reaches the SQL");
-        System.out.println("  string: the AST holds a slot index, not the characters.");
-        System.out.println();
-
-        System.out.println("-- and an identifier that is not in the catalog --");
-        try {
-            compiler.compile("list { transactionId } over { Password = 'x' }");
-        } catch (TaqlException e) {
-            e.diagnostics().forEach(d -> System.out.println("  " + d));
-        }
-        System.out.println();
-    }
-
-    private static String render(Object value) {
-        if (value == null) return "NULL";
-        if (value instanceof String s) return "'" + s + "'";
-        return value.toString();
     }
 
     // ------------------------------------------------------------------
@@ -192,7 +112,7 @@ public final class Main {
         }
     }
 
-    private static HikariDataSource tryConnect() {
+    private static HikariDataSource dataSource() {
         HikariDataSource dataSource = new HikariDataSource();
         dataSource.setUsername("sa");
         dataSource.setPassword("Password22");
@@ -206,20 +126,13 @@ public final class Main {
         dataSource.setMaximumPoolSize(2);
         dataSource.setPoolName("taql-pool");
         dataSource.setConnectionTimeout(3000);
+        // Do not probe the server at startup: without one, the demo still
+        // compiles every query and shows how the failure is classified.
         dataSource.setInitializationFailTimeout(-1);
-
-        try (Connection ignored = dataSource.getConnection()) {
-            System.out.println("connected to SQL Server; queries will be executed\n");
-            return dataSource;
-        } catch (SQLException e) {
-            System.out.println("no SQL Server on localhost:1433 -- printing SQL only");
-            System.out.println("(start one with ./runMsSqlServer.sh)\n");
-            dataSource.close();
-            return null;
-        }
+        return dataSource;
     }
 
-    private static void initialiseSchema(HikariDataSource dataSource) throws IOException, SQLException {
+    private static void initialiseSchema(HikariDataSource dataSource) throws IOException {
         String script;
         try (InputStream in = Main.class.getResourceAsStream("/init.sql")) {
             script = new String(in.readAllBytes(), StandardCharsets.UTF_8);
@@ -229,6 +142,10 @@ public final class Main {
             for (String batch : script.split("(?m)^\\s*GO\\s*$")) {
                 if (!batch.isBlank()) statement.execute(batch);
             }
+            log.info("connected to SQL Server; queries will be executed");
+        } catch (SQLException e) {
+            log.warn("no SQL Server on localhost:1433 -- queries will compile but not run"
+                    + " (start one with ./runMsSqlServer.sh)");
         }
     }
 }

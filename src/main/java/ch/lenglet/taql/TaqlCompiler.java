@@ -9,6 +9,8 @@ import ch.lenglet.taql.runtime.Binder;
 import ch.lenglet.taql.sem.Resolver;
 import ch.lenglet.taql.sem.Tam;
 import ch.lenglet.taql.sql.SqlServerGenerator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
@@ -38,6 +40,17 @@ import java.util.Map;
  */
 public final class TaqlCompiler {
 
+    /**
+     * What is safe to log here, and what is not.
+     *
+     * The shape key and the generated SQL are value-free by construction --
+     * literals were lifted out before either was built, and the SQL carries
+     * {@code ?} where they used to be. Both can go in a log. The source text and
+     * the bound values cannot: they are the client ids, amounts and names the
+     * query was asked about, and a log is not where those belong.
+     */
+    private static final Logger log = LoggerFactory.getLogger(TaqlCompiler.class);
+
     private final Catalog catalog;
     private final Resolver.Options options;
     private final PlanCache<String, Compiled> textCache;
@@ -64,6 +77,12 @@ public final class TaqlCompiler {
         public List<Object> bind() {
             return bind(Map.of());
         }
+
+        /** Carries no literal values; see {@link TaqlQuery#toString()}. */
+        @Override
+        public String toString() {
+            return "Compiled[plan=" + plan.id() + ", literals=" + literals.size() + "]";
+        }
     }
 
     public Compiled compile(String source) {
@@ -71,7 +90,11 @@ public final class TaqlCompiler {
             Ast.Query parsed = TaqlParserFacade.parse(text);
             Plan plan = shapeCache.get(parsed.shapeKey(), shape -> {
                 Resolver.Result resolved = Resolver.resolve(catalog, parsed, options);
-                return SqlServerGenerator.generate(resolved.query(), resolved.variables(), shape);
+                Plan generated = SqlServerGenerator.generate(resolved.query(), resolved.variables(), shape);
+                log.debug("plan {} compiled, {} parameters\n{}",
+                        generated.id(), generated.parameters().size(), generated.sql().stripTrailing());
+                log.trace("plan {} has shape {}", generated.id(), shape);
+                return generated;
             });
             return new Compiled(plan, parsed.literals());
         });

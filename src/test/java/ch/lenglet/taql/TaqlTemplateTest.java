@@ -1,7 +1,7 @@
 package ch.lenglet.taql;
 
 import ch.lenglet.taql.catalog.DemoCatalog;
-import ch.lenglet.taql.runtime.TaqlExecutor;
+import ch.lenglet.taql.runtime.TaqlTemplate;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -25,19 +25,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * executor's, not the server's: how many rows it is willing to pull into the
  * heap before it refuses.
  */
-@DisplayName("executor limits")
-class TaqlExecutorTest {
+@DisplayName("template limits")
+class TaqlTemplateTest {
 
     private final TaqlCompiler compiler = new TaqlCompiler(DemoCatalog.create());
 
-    private TaqlExecutor executorOver(int availableRows, int maxRows) {
-        return new TaqlExecutor(compiler, sourceOf(availableRows),
-                new TaqlExecutor.Options(30, 3, 50, maxRows, 1_000));
+    private TaqlTemplate templateOver(int availableRows, int maxRows) {
+        return new TaqlTemplate(compiler, sourceOf(availableRows),
+                new TaqlTemplate.Options(30, 3, 50, maxRows, 1_000));
     }
+
+    private static final TaqlQuery QUERY =
+            TaqlQuery.of("list { TransactionId } over { Country = 'CH' }");
 
     @Test
     void returnsEverythingUpToTheCeiling() {
-        var rows = executorOver(5, 5).run("list { TransactionId } over { Country = 'CH' }").rows();
+        var rows = templateOver(5, 5).execute(QUERY);
         assertEquals(5, rows.size());
         assertEquals(Map.of("TransactionId", "row"), rows.getFirst());
     }
@@ -47,7 +50,7 @@ class TaqlExecutorTest {
         // An analytical answer missing rows nobody mentioned is worse than an
         // error, so the ceiling is a failure and not a quiet cut-off.
         var tooMany = assertThrows(TaqlException.class,
-                () -> executorOver(6, 5).run("list { TransactionId } over { Country = 'CH' }"));
+                () -> templateOver(6, 5).execute(QUERY));
 
         assertTrue(tooMany.getMessage().contains("more than 5 rows"), tooMany.getMessage());
         assertTrue(tooMany.getMessage().contains("top N"), tooMany.getMessage());
@@ -56,8 +59,8 @@ class TaqlExecutorTest {
 
     @Test
     void theCeilingCannotBeConfiguredAway() {
-        assertThrows(IllegalArgumentException.class, () -> new TaqlExecutor.Options(30, 3, 50, 0, 1_000));
-        assertThrows(IllegalArgumentException.class, () -> new TaqlExecutor.Options(30, 3, 50, -1, 1_000));
+        assertThrows(IllegalArgumentException.class, () -> new TaqlTemplate.Options(30, 3, 50, 0, 1_000));
+        assertThrows(IllegalArgumentException.class, () -> new TaqlTemplate.Options(30, 3, 50, -1, 1_000));
     }
 
     // ------------------------------------------------------------------

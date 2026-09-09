@@ -17,7 +17,7 @@ alias mvn='/Applications/IntelliJ IDEA.app/Contents/plugins/maven/lib/maven3/bin
 ```bash
 mvn test                     # ANTLR codegen + compile + all tests
 mvn compile                  # regenerates the parser into target/generated-sources
-mvn compile exec:java        # compiles every query in example.taql, prints SQL + bindings
+mvn compile exec:java        # runs every query in example.taql through TaqlTemplate
 
 # single test class / nested group / method ($ must be quoted in zsh)
 mvn test -Dtest=SqlFailureTest
@@ -27,7 +27,11 @@ mvn test -Dtest='TaqlCompilerTest$Windows#lagKeepsTheTypeOfWhatItReads'
 
 The parser is generated at build time from `src/main/antlr4/.../Taql.g4` — after a grammar edit you must run `mvn compile` before the Java sources referencing new tokens/contexts will resolve.
 
-Database is optional. `./runMsSqlServer.sh` starts SQL Server 2019 in Docker (sa / `Password22`, port 1433); `Main` then also *executes* the examples and applies `src/main/resources/init.sql`. Without it, `Main` prints SQL and bindings only, and the whole test suite still passes — the tests never touch a database.
+Database is optional. `./runMsSqlServer.sh` starts SQL Server 2019 in Docker (sa / `Password22`, port 1433); `Main` then also *executes* the examples and applies `src/main/resources/init.sql`. Without it every query still compiles — and its SQL is still logged — then fails with a classified execution error. The whole test suite passes either way; the tests never touch a database.
+
+**Logging.** `Main` holds only a `TaqlTemplate`, so the generated SQL, plan ids and cache behaviour come from the library's own debug logs rather than from the driver — which is what an operator sees in production. `slf4j-api` is a normal dependency; `slf4j-simple` is `runtime` scope for the demo only and an embedder should exclude it. `src/main/resources/simplelogger.properties` sets debug on `ch.lenglet`; the copy in `src/test/resources` wins on the test classpath and keeps the suite quiet.
+
+What is safe to log is a deliberate line: the shape key and the generated SQL are value-free by construction, so they can go in a log; the query source and the bound values cannot — they are the client ids and amounts the query asked about. `Plan.id()` is a short hash of the shape key that correlates the compile line with every execution of it.
 
 ## Pipeline
 
@@ -37,7 +41,7 @@ text → TaqlParserFacade (ANTLR)  → parse tree
      → Resolver (+ Catalog)      → Tam          typed, resolved, physical
      → SqlServerGenerator        → Plan         SQL text + parameter recipe
      → Binder                    → JDBC values
-     → TaqlExecutor              → Rows
+     → TaqlTemplate              → List<Map<String,Object>>
 ```
 
 `TaqlCompiler` is the façade over the whole thing plus both caches. `compileUncached` bypasses the caches and is what most tests call.
@@ -109,7 +113,9 @@ The resolver **collects** diagnostics rather than failing on the first, then thr
 - **Never match on message text** — server messages are localised.
 - **Use both `getErrorCode()` and `getSQLState()`** — the code is 0 for driver-side failures (timeout, connection loss), which carry meaning only in the SQL state.
 
-`TaqlExecutor` retries only what is worth retrying (safe because every TAQL query is a `SELECT`), bounds every statement with `queryTimeout`, and keeps the server's message off the response: `TaqlExecutionException.getMessage()` is a fixed generic string per category, raw detail lives on `logDetail()` / `databaseMessage()`. `SCHEMA_MISMATCH` (208/207) is a **server** fault — 500 and an alert, never a 400.
+`TaqlTemplate` retries only what is worth retrying (safe because every TAQL query is a `SELECT`), bounds every statement with `queryTimeout`, and keeps the server's message off both the response *and* the log. `TaqlExecutionException.getMessage()` is a fixed generic string per category; `logDetail()` is the failure, error number, SQL state and attempt count, all value-free. `SCHEMA_MISMATCH` (208/207) is a **server** fault — 500 and an alert, never a 400.
+
+**CID.** A query's constants and a caller's variable values are client-identifying data, and nothing in the library may log them. Error 245 is *"Conversion failed when converting the varchar value '…'"*, so `databaseMessage()` can quote a client id — it is reachable but never logged here, and since server messages are localised it was never the diagnosis anyway. The types that hold values (`TaqlQuery`, `TaqlCompiler.Compiled`, `Ast.Query`) override `toString()` so a record's generated one cannot disclose them; `CidTest` pins all of it. Safe to log, by construction: the generated SQL (it carries `?`), the shape key, `Plan.id()`, and counts.
 
 ## Deliberate omissions
 
