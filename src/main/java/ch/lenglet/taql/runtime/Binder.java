@@ -2,6 +2,7 @@ package ch.lenglet.taql.runtime;
 
 import ch.lenglet.taql.Diagnostic;
 import ch.lenglet.taql.TaqlException;
+import ch.lenglet.taql.SqlType;
 import ch.lenglet.taql.TaqlType;
 import ch.lenglet.taql.plan.Plan;
 
@@ -74,7 +75,7 @@ public final class Binder {
             int index = i + 1;
             if (value == null) {
                 // The physical type, not the DSL type, is what the server expects.
-                statement.setNull(index, slot.sqlType().jdbcType());
+                statement.setNull(index, sqlType(slot).jdbcType());
                 continue;
             }
             switch (value) {
@@ -83,7 +84,7 @@ public final class Binder {
                 // made per parameter from its own type rather than by a
                 // connection-wide sendStringParametersAsUnicode switch.
                 case String s -> {
-                    if (slot.sqlType().unicode()) statement.setNString(index, s);
+                    if (sqlType(slot).unicode()) statement.setNString(index, s);
                     else statement.setString(index, s);
                 }
                 case Long l -> statement.setLong(index, l);
@@ -95,6 +96,17 @@ public final class Binder {
                 default -> statement.setObject(index, value);
             }
         }
+    }
+
+    /**
+     * This binder speaks JDBC, so it needs a T-SQL type. A plan built by another
+     * backend's generator would carry that backend's types and has no business
+     * reaching here -- an internal fault, not something a caller can provoke.
+     */
+    private static SqlType sqlType(Plan.ParamSlot slot) {
+        if (slot.physicalType() instanceof SqlType sql) return sql;
+        throw new IllegalStateException("the JDBC binder needs a SQL type, got "
+                + slot.physicalType().describe());
     }
 
     private static Object require(Map<String, Object> variables, String name) {

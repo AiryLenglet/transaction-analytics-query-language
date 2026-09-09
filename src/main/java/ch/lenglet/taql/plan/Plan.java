@@ -1,6 +1,6 @@
 package ch.lenglet.taql.plan;
 
-import ch.lenglet.taql.SqlType;
+import ch.lenglet.taql.PhysicalType;
 import ch.lenglet.taql.TaqlType;
 
 import java.util.Collections;
@@ -11,7 +11,7 @@ import java.util.Map;
 /**
  * A compiled, immutable, cacheable query plan.
  *
- * The plan holds SQL text with {@code ?} placeholders and, crucially, a
+ * The plan holds statement text with {@code ?} placeholders and, crucially, a
  * <em>recipe</em> for filling them rather than the values themselves. That
  * separation is what makes the cache useful: the same plan serves
  * {@code ClientId in ['1','3']} and {@code ClientId in ['7','9']}, because each
@@ -21,7 +21,7 @@ import java.util.Map;
  * @param variables   the $variables this plan needs, and their inferred types.
  *                    A REST layer can publish this as the endpoint's contract.
  */
-public record Plan(String sql,
+public record Plan(String statement,
                    List<ParamSlot> parameters,
                    List<Column> columns,
                    Map<String, TaqlType> variables,
@@ -52,20 +52,20 @@ public record Plan(String sql,
     /** Where one bound parameter's value comes from. */
     public sealed interface ParamSlot {
         TaqlType type();
-        SqlType sqlType();
+        PhysicalType physicalType();
     }
 
     /** Auto-parameterised user literal: value = literals[index] of the query being run. */
-    public record Auto(int index, TaqlType type, SqlType sqlType) implements ParamSlot {}
+    public record Auto(int index, TaqlType type, PhysicalType physicalType) implements ParamSlot {}
 
     /** A named $variable supplied by the caller. */
-    public record Variable(String name, TaqlType type, SqlType sqlType) implements ParamSlot {}
+    public record Variable(String name, TaqlType type, PhysicalType physicalType) implements ParamSlot {}
 
     /** A compiler-supplied constant, e.g. the default row cap. Shape-invariant, so it lives in the plan. */
-    public record Constant(Object value, TaqlType type, SqlType sqlType) implements ParamSlot {}
+    public record Constant(Object value, TaqlType type, PhysicalType physicalType) implements ParamSlot {}
 
     /** A whole list bound as a single JSON parameter -- see SqlServerGenerator. */
-    public record VariableList(String name, TaqlType elementType, SqlType sqlType) implements ParamSlot {
+    public record VariableList(String name, TaqlType elementType, PhysicalType physicalType) implements ParamSlot {
         @Override
         public TaqlType type() {
             return TaqlType.listOf(elementType);

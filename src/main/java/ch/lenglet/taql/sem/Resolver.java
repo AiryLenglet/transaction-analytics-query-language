@@ -1,8 +1,9 @@
 package ch.lenglet.taql.sem;
 
+import ch.lenglet.taql.Backend;
 import ch.lenglet.taql.Diagnostic;
 import ch.lenglet.taql.TaqlException;
-import ch.lenglet.taql.SqlType;
+import ch.lenglet.taql.PhysicalType;
 import ch.lenglet.taql.TaqlType;
 import ch.lenglet.taql.ast.Ast;
 import ch.lenglet.taql.catalog.Catalog;
@@ -48,21 +49,24 @@ public final class Resolver {
 
     private final Catalog catalog;
     private final Options options;
+    /** Supplies the physical type for a value no column has typed. */
+    private final Backend backend;
     private final List<Diagnostic> errors = new ArrayList<>();
     private final Set<String> requiredJoins = new LinkedHashSet<>();
     private final Map<String, TaqlType> variableTypes = new LinkedHashMap<>();
 
     private Catalog.Entity entity;
 
-    private Resolver(Catalog catalog, Options options) {
+    private Resolver(Catalog catalog, Options options, Backend backend) {
         this.catalog = catalog;
         this.options = options;
+        this.backend = backend;
     }
 
     public record Result(Tam.Query query, Map<String, TaqlType> variables) {}
 
-    public static Result resolve(Catalog catalog, Ast.Query parsed, Options options) {
-        Resolver r = new Resolver(catalog, options);
+    public static Result resolve(Catalog catalog, Ast.Query parsed, Options options, Backend backend) {
+        Resolver r = new Resolver(catalog, options, backend);
         Tam.Query query = r.statement(parsed.stmt());
         r.checkAllVariablesTyped();
         if (!r.errors.isEmpty()) throw new TaqlException(r.errors);
@@ -197,12 +201,12 @@ public final class Resolver {
     private Tam.Expr limit(Ast.Top top) {
         if (top == null) {
             return options.defaultRowLimit() > 0
-                    ? new Tam.Constant((long) options.defaultRowLimit(), TaqlType.INTEGER, new SqlType.Int())
+                    ? new Tam.Constant((long) options.defaultRowLimit(), TaqlType.INTEGER, backend.defaultTypeFor(TaqlType.INTEGER))
                     : null;
         }
         return switch (top.count()) {
-            case Ast.Lit l -> new Tam.LiteralRef(l.slot(), TaqlType.INTEGER, new SqlType.Int());
-            case Ast.Param p -> variable(p, TaqlType.INTEGER, new SqlType.Int());
+            case Ast.Lit l -> new Tam.LiteralRef(l.slot(), TaqlType.INTEGER, backend.defaultTypeFor(TaqlType.INTEGER));
+            case Ast.Param p -> variable(p, TaqlType.INTEGER, backend.defaultTypeFor(TaqlType.INTEGER));
             default -> throw fail(top.pos(), Diagnostic.Phase.TYPE, "'top' expects a number or a $variable");
         };
     }
@@ -346,7 +350,7 @@ public final class Resolver {
                 if (subject.type().kind() != TaqlType.Kind.STRING) {
                     error(l.pos(), Diagnostic.Phase.TYPE, "'like' needs a text field but got " + subject.type());
                 }
-                yield new Tam.Like(subject, coerce(expr(l.pattern(), false), TaqlType.STRING, new SqlType.VarChar(400), l.pos()),
+                yield new Tam.Like(subject, coerce(expr(l.pattern(), false), TaqlType.STRING, backend.defaultTypeFor(TaqlType.STRING), l.pos()),
                         l.negated());
             }
         };
@@ -498,8 +502,8 @@ public final class Resolver {
         return coerce(other, anchor.type(), sqlTypeOf(anchor), pos);
     }
 
-    private static SqlType sqlTypeOf(Tam.Expr e) {
-        return e instanceof Tam.Column c ? c.field().sqlType() : null;
+    private static PhysicalType sqlTypeOf(Tam.Expr e) {
+        return e instanceof Tam.Column c ? c.field().physicalType() : null;
     }
 
     /**
@@ -507,10 +511,10 @@ public final class Resolver {
      * NULL can change type: a column never silently converts, because that is
      * exactly the implicit conversion that stops SQL Server using an index.
      */
-    private Tam.Expr coerce(Tam.Expr e, TaqlType target, SqlType sqlType, Ast.Pos pos) {
+    private Tam.Expr coerce(Tam.Expr e, TaqlType target, PhysicalType sqlType, Ast.Pos pos) {
         if (target == null) return e;
 
-        SqlType effective = sqlType != null ? sqlType : sqlTypeFor(target);
+        PhysicalType effective = sqlType != null ? sqlType : sqlTypeFor(target);
 
         // Same logical type, but we now know the physical type of the column
         // this value is compared against. Adopting it is the difference between
@@ -519,8 +523,8 @@ public final class Resolver {
         if (e.type().equals(target)) {
             if (sqlType == null) return e;
             return switch (e) {
-                case Tam.LiteralRef l -> l.sqlType().equals(sqlType) ? l : new Tam.LiteralRef(l.slot(), target, sqlType);
-                case Tam.Variable v -> v.sqlType() != null && v.sqlType().equals(sqlType)
+                case Tam.LiteralRef l -> l.physicalType().equals(sqlType) ? l : new Tam.LiteralRef(l.slot(), target, sqlType);
+                case Tam.Variable v -> v.physicalType() != null && v.physicalType().equals(sqlType)
                         ? v : retypeVariable(v, target, sqlType, pos);
                 default -> e;
             };
@@ -593,14 +597,14 @@ public final class Resolver {
     // Variables
     // ------------------------------------------------------------------
 
-    private Tam.Variable variable(Ast.Param p, TaqlType type, SqlType sqlType) {
+    private Tam.Variable variable(Ast.Param p, TaqlType type, PhysicalType sqlType) {
         TaqlType known = variableTypes.get(p.name());
         TaqlType resolved = known == null || known.kind() == TaqlType.Kind.NULL ? type : known;
         variableTypes.put(p.name(), resolved);
         return new Tam.Variable(p.name(), resolved, sqlType != null ? sqlType : sqlTypeFor(resolved));
     }
 
-    private Tam.Variable retypeVariable(Tam.Variable v, TaqlType target, SqlType sqlType, Ast.Pos pos) {
+    private Tam.Variable retypeVariable(Tam.Variable v, TaqlType target, PhysicalType sqlType, Ast.Pos pos) {
         TaqlType known = variableTypes.get(v.name());
         if (known != null && known.kind() != TaqlType.Kind.NULL && !known.equals(target)
                 && !(known.isNumeric() && target.isNumeric())) {
@@ -620,18 +624,12 @@ public final class Resolver {
         });
     }
 
-    /** Fallback physical type for a value with no column to take one from. */
-    static SqlType sqlTypeFor(TaqlType type) {
-        return switch (type.kind()) {
-            case STRING -> new SqlType.VarChar(400);
-            case INTEGER -> new SqlType.BigInt();
-            case DECIMAL -> new SqlType.Decimal(38, 10);
-            case DATE -> new SqlType.Date();
-            case TIMESTAMP -> new SqlType.DateTime2(7);
-            case BOOLEAN -> new SqlType.Bit();
-            case NULL -> new SqlType.VarChar(400);
-            case LIST -> sqlTypeFor(type.element());
-        };
+    /**
+     * Fallback physical type for a value with no column to take one from. What
+     * counts as reasonable is the target store's business, so it answers.
+     */
+    private PhysicalType sqlTypeFor(TaqlType type) {
+        return backend.defaultTypeFor(type);
     }
 
     // ------------------------------------------------------------------

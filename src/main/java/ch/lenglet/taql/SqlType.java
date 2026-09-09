@@ -20,10 +20,16 @@ import java.sql.Types;
  *
  * Not exhaustive T-SQL -- just the types this POC can bind.
  */
-public sealed interface SqlType {
+public sealed interface SqlType extends PhysicalType {
 
     /** T-SQL rendering, e.g. {@code varchar(50)}. */
     String sql();
+
+    /** For a SQL type, its own dialect's rendering is the description. */
+    @Override
+    default String describe() {
+        return sql();
+    }
 
     /** The {@link Types} constant to use when binding a NULL in this position. */
     int jdbcType();

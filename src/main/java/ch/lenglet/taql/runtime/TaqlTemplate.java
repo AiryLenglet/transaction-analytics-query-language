@@ -144,7 +144,7 @@ public final class TaqlTemplate {
 
     private List<Map<String, Object>> run(Plan plan, List<Object> values) throws SQLException {
         try (Connection connection = dataSource.getConnection();
-             PreparedStatement statement = connection.prepareStatement(plan.sql())) {
+             PreparedStatement statement = connection.prepareStatement(plan.statement())) {
             // Every TAQL query is a SELECT; saying so lets the driver and any
             // proxy in front of it route and optimise accordingly.
             connection.setReadOnly(true);

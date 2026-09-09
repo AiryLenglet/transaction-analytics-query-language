@@ -1,5 +1,7 @@
 package ch.lenglet.taql.sql;
 
+import ch.lenglet.taql.Backend;
+import ch.lenglet.taql.PhysicalType;
 import ch.lenglet.taql.SqlType;
 import ch.lenglet.taql.TaqlType;
 import ch.lenglet.taql.catalog.Catalog;
@@ -26,7 +28,7 @@ import java.util.Set;
  * Nothing user-supplied is ever concatenated into the text: identifiers come
  * from the catalog, operators from a closed set, and values only ever as '?'.
  */
-public final class SqlServerGenerator {
+public final class SqlServerGenerator implements Backend {
 
     // Aliases the generator gives its own levels. They must differ from each
     // other -- all three can nest in one statement -- and no table may be given
@@ -46,13 +48,40 @@ public final class SqlServerGenerator {
     /** When set, column references resolve to the derived table instead of the base tables. */
     private Map<Catalog.Field, String> derivedNames;
 
-    public static Plan generate(Tam.Query query, Map<String, TaqlType> variables, String shapeKey) {
-        SqlServerGenerator g = new SqlServerGenerator();
-        g.query(query);
+    @Override
+    public String name() {
+        return "sqlserver";
+    }
+
+    /**
+     * What a value binds as when no column typed it. Wide enough not to
+     * truncate, narrow enough to be a real type -- a literal that never met a
+     * column is not being compared to one, so there is no index seek to lose.
+     */
+    @Override
+    public PhysicalType defaultTypeFor(TaqlType type) {
+        return switch (type.kind()) {
+            case STRING -> new SqlType.VarChar(400);
+            case INTEGER -> new SqlType.BigInt();
+            case DECIMAL -> new SqlType.Decimal(38, 10);
+            case DATE -> new SqlType.Date();
+            case TIMESTAMP -> new SqlType.DateTime2(7);
+            case BOOLEAN -> new SqlType.Bit();
+            case NULL -> new SqlType.VarChar(400);
+            case LIST -> defaultTypeFor(type.element());
+        };
+    }
+
+    @Override
+    public Plan generate(Tam.Query query, Map<String, TaqlType> variables, String shapeKey) {
+        // Emission state is per statement, so each call builds its own
+        // generator: the instance a compiler holds stays stateless and shared.
+        SqlServerGenerator emission = new SqlServerGenerator();
+        emission.query(query);
         List<Plan.Column> columns = query.outputs().stream()
                 .map(o -> new Plan.Column(o.alias(), o.expr().type()))
                 .toList();
-        return new Plan(g.sql.toString(), g.parameters, columns, variables, shapeKey);
+        return new Plan(emission.sql.toString(), emission.parameters, columns, variables, shapeKey);
     }
 
     private void query(Tam.Query q) {
@@ -625,7 +654,9 @@ public final class SqlServerGenerator {
      */
     private void inVariable(Tam.InVariable v) {
         Tam.Variable var = v.variable();
-        SqlType elementType = var.sqlType() != null ? var.sqlType() : new SqlType.VarChar(400);
+        // A variable resolved against a column carries that column's type; one
+        // that never met a column falls back to something wide enough to hold it.
+        SqlType elementType = var.physicalType() instanceof SqlType sql ? sql : new SqlType.VarChar(400);
         expr(v.subject());
         sql.append(v.negated() ? " NOT IN (" : " IN (");
         // The rendered type comes from SqlType, not from a string in the catalog.
@@ -652,15 +683,15 @@ public final class SqlServerGenerator {
     private void value(Tam.Expr e) {
         switch (e) {
             case Tam.LiteralRef l -> {
-                parameters.add(new Plan.Auto(l.slot(), l.type(), l.sqlType()));
+                parameters.add(new Plan.Auto(l.slot(), l.type(), l.physicalType()));
                 sql.append("?");
             }
             case Tam.Variable v -> {
-                parameters.add(new Plan.Variable(v.name(), v.type(), v.sqlType()));
+                parameters.add(new Plan.Variable(v.name(), v.type(), v.physicalType()));
                 sql.append("?");
             }
             case Tam.Constant c -> {
-                parameters.add(new Plan.Constant(c.value(), c.type(), c.sqlType()));
+                parameters.add(new Plan.Constant(c.value(), c.type(), c.physicalType()));
                 sql.append("?");
             }
             default -> expr(e);

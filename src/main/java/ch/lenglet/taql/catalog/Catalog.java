@@ -1,6 +1,6 @@
 package ch.lenglet.taql.catalog;
 
-import ch.lenglet.taql.SqlType;
+import ch.lenglet.taql.PhysicalType;
 import ch.lenglet.taql.TaqlType;
 
 import java.util.LinkedHashMap;
@@ -121,24 +121,26 @@ public record Catalog(Map<String, Entity> entities) {
      * @param source  empty for a column on the entity's own table, otherwise the
      *                name of the {@link Join} it is reached through. Resolving a
      *                field with a source is what pulls that join into the plan.
-     * @param sqlType the physical type, so bound parameters are sent with a type
-     *                that matches the column instead of forcing a conversion.
+     * @param physicalType the target store's type for this field, so a bound
+     *                parameter is sent as the thing the field actually is
+     *                instead of forcing a conversion. Its vocabulary belongs to
+     *                the backend; the catalog only carries it.
      */
-    public record Field(String name, TaqlType type, String source, String column, SqlType sqlType) {
+    public record Field(String name, TaqlType type, String source, String column, PhysicalType physicalType) {
 
         /** A column on the entity's own table, exposed under the column's own name. */
-        public static Field of(String name, TaqlType type, SqlType sqlType) {
-            return of(name, type, name, sqlType);
+        public static Field of(String name, TaqlType type, PhysicalType physicalType) {
+            return of(name, type, name, physicalType);
         }
 
         /** A column on the entity's own table, exposed under a different name. */
-        public static Field of(String name, TaqlType type, String column, SqlType sqlType) {
-            return new Field(name, type, "", column, sqlType);
+        public static Field of(String name, TaqlType type, String column, PhysicalType physicalType) {
+            return new Field(name, type, "", column, physicalType);
         }
 
         /** A column reached through {@code join}. */
-        public static Field from(String join, String name, TaqlType type, String column, SqlType sqlType) {
-            return new Field(name, type, join, column, sqlType);
+        public static Field from(String join, String name, TaqlType type, String column, PhysicalType physicalType) {
+            return new Field(name, type, join, column, physicalType);
         }
 
         public boolean isJoined() {

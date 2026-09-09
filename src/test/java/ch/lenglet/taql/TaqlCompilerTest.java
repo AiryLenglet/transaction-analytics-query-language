@@ -47,14 +47,14 @@ class TaqlCompilerTest {
                     """);
 
             assertAll(
-                    () -> assertTrue(plan.sql().contains("CASE WHEN t.[TransactionType] IN (?, ?) THEN ?")),
-                    () -> assertTrue(plan.sql().contains("COUNT(*)")),
-                    () -> assertTrue(plan.sql().contains("t.[TransactionDate] BETWEEN ? AND ?")),
+                    () -> assertTrue(plan.statement().contains("CASE WHEN t.[TransactionType] IN (?, ?) THEN ?")),
+                    () -> assertTrue(plan.statement().contains("COUNT(*)")),
+                    () -> assertTrue(plan.statement().contains("t.[TransactionDate] BETWEEN ? AND ?")),
                     // The key carries parameters, so it is projected once by a
                     // derived table and the measures read it back from there.
-                    () -> assertTrue(plan.sql().contains("END AS [category]")),
-                    () -> assertTrue(plan.sql().contains("GROUP BY g.[category]")),
-                    () -> assertTrue(plan.sql().matches("(?s).*SUM\\(CASE WHEN g\\.\\[c\\d\\] = \\? THEN g\\.\\[c\\d\\] END\\).*")),
+                    () -> assertTrue(plan.statement().contains("END AS [category]")),
+                    () -> assertTrue(plan.statement().contains("GROUP BY g.[category]")),
+                    () -> assertTrue(plan.statement().matches("(?s).*SUM\\(CASE WHEN g\\.\\[c\\d\\] = \\? THEN g\\.\\[c\\d\\] END\\).*")),
                     () -> assertEquals(List.of("category", "incoming", "outgoing", "count"),
                             plan.columns().stream().map(Plan.Column::name).toList()));
         }
@@ -62,7 +62,7 @@ class TaqlCompilerTest {
         @Test
         void theFlatSchemaNeedsNoJoins() {
             assertFalse(compiler.compileUncached("list { transactionId, country, transactionType }")
-                    .sql().contains("JOIN"));
+                    .statement().contains("JOIN"));
         }
 
         @Test
@@ -70,7 +70,7 @@ class TaqlCompilerTest {
             Plan plan = compiler.compileUncached("""
                     analysis by country { total = sum(TransactionValue) } top 10 by total
                     """);
-            assertTrue(plan.sql().contains("ORDER BY [total] DESC"));
+            assertTrue(plan.statement().contains("ORDER BY [total] DESC"));
         }
 
         @Test
@@ -83,11 +83,11 @@ class TaqlCompilerTest {
                     }
                     """);
             assertAll(
-                    () -> assertTrue(plan.sql().contains("FROM (")),
-                    () -> assertTrue(plan.sql().contains("END AS [bucket]")),
-                    () -> assertTrue(plan.sql().contains("GROUP BY g.[bucket]")),
-                    () -> assertFalse(plan.sql().contains("GROUP BY CASE"), "key must not be repeated"),
-                    () -> assertEquals(1, plan.sql().split("CASE WHEN t.\\[Currency\\]", -1).length - 1,
+                    () -> assertTrue(plan.statement().contains("FROM (")),
+                    () -> assertTrue(plan.statement().contains("END AS [bucket]")),
+                    () -> assertTrue(plan.statement().contains("GROUP BY g.[bucket]")),
+                    () -> assertFalse(plan.statement().contains("GROUP BY CASE"), "key must not be repeated"),
+                    () -> assertEquals(1, plan.statement().split("CASE WHEN t.\\[Currency\\]", -1).length - 1,
                             "the key expression must be emitted exactly once"));
         }
 
@@ -96,8 +96,8 @@ class TaqlCompilerTest {
             // YEAR(TransactionDate) repeats harmlessly, so no derived table is needed.
             Plan plan = compiler.compileUncached(
                     "analysis by y = year(TransactionDate) { total = sum(TransactionValue) }");
-            assertFalse(plan.sql().contains("FROM ("));
-            assertTrue(plan.sql().contains("GROUP BY YEAR(t.[TransactionDate])"));
+            assertFalse(plan.statement().contains("FROM ("));
+            assertTrue(plan.statement().contains("GROUP BY YEAR(t.[TransactionDate])"));
         }
 
         @Test
@@ -119,8 +119,8 @@ class TaqlCompilerTest {
             // it a NULL result instead of a failed request.
             Plan plan = compiler.compileUncached(
                     "analysis by Country { total = sum(TransactionValue)  pct = share(total) }");
-            assertTrue(plan.sql().contains("q.[total] * 1.0 / NULLIF(SUM(q.[total]) OVER (), 0) AS [pct]"),
-                    plan.sql());
+            assertTrue(plan.statement().contains("q.[total] * 1.0 / NULLIF(SUM(q.[total]) OVER (), 0) AS [pct]"),
+                    plan.statement());
             assertEquals(TaqlType.DECIMAL, plan.columns().getLast().type());
         }
 
@@ -129,14 +129,14 @@ class TaqlCompilerTest {
             assertTrue(compiler.compileUncached(
                     "analysis by Country, Currency { total = sum(TransactionValue) "
                             + " pct = share(total) within Country }")
-                    .sql().contains("OVER (PARTITION BY q.[Country])"));
+                    .statement().contains("OVER (PARTITION BY q.[Country])"));
         }
 
         @Test
         void rankOrdersByItsArgumentDescendingSoRankOneIsTheLargest() {
             Plan plan = compiler.compileUncached(
                     "analysis by Country { total = sum(TransactionValue)  rk = rank(total) }");
-            assertTrue(plan.sql().contains("RANK() OVER (ORDER BY q.[total] DESC) AS [rk]"), plan.sql());
+            assertTrue(plan.statement().contains("RANK() OVER (ORDER BY q.[total] DESC) AS [rk]"), plan.statement());
             assertEquals(TaqlType.INTEGER, plan.columns().getLast().type());
         }
 
@@ -146,8 +146,8 @@ class TaqlCompilerTest {
                     "analysis by Country, y = year(TransactionDate) {"
                             + "  total = sum(TransactionValue)"
                             + "  prev = lag(total) within Country ordered by y }");
-            assertTrue(plan.sql().contains(
-                    "LAG(q.[total]) OVER (PARTITION BY q.[Country] ORDER BY q.[y] ASC) AS [prev]"), plan.sql());
+            assertTrue(plan.statement().contains(
+                    "LAG(q.[total]) OVER (PARTITION BY q.[Country] ORDER BY q.[y] ASC) AS [prev]"), plan.statement());
             assertEquals(TaqlType.DECIMAL, plan.columns().getLast().type());
         }
 
@@ -157,12 +157,12 @@ class TaqlCompilerTest {
                     "analysis by Country, CounterpartyName { total = sum(TransactionValue) }"
                             + " top 2 by total within Country");
             assertAll(
-                    () -> assertTrue(plan.sql().contains(
-                            "ROW_NUMBER() OVER (PARTITION BY q.[Country] ORDER BY q.[total] DESC)"), plan.sql()),
-                    () -> assertTrue(plan.sql().contains("WHERE w.[__rank] <= ?")),
+                    () -> assertTrue(plan.statement().contains(
+                            "ROW_NUMBER() OVER (PARTITION BY q.[Country] ORDER BY q.[total] DESC)"), plan.statement()),
+                    () -> assertTrue(plan.statement().contains("WHERE w.[__rank] <= ?")),
                     // A per-group cap is not a global one.
-                    () -> assertFalse(plan.sql().contains("TOP")),
-                    () -> assertTrue(plan.sql().contains("ORDER BY [Country] ASC, [total] DESC")));
+                    () -> assertFalse(plan.statement().contains("TOP")),
+                    () -> assertTrue(plan.statement().contains("ORDER BY [Country] ASC, [total] DESC")));
         }
 
         @Test
@@ -174,10 +174,10 @@ class TaqlCompilerTest {
                             + "  total = sum(TransactionValue)"
                             + "  pct = share(total) }");
             assertAll(
-                    () -> assertEquals(2, plan.sql().split("FROM \\(", -1).length - 1, plan.sql()),
-                    () -> assertTrue(plan.sql().contains("END AS [b]")),
-                    () -> assertTrue(plan.sql().contains("GROUP BY g.[b]")),
-                    () -> assertTrue(plan.sql().contains("NULLIF(SUM(q.[total])")));
+                    () -> assertEquals(2, plan.statement().split("FROM \\(", -1).length - 1, plan.statement()),
+                    () -> assertTrue(plan.statement().contains("END AS [b]")),
+                    () -> assertTrue(plan.statement().contains("GROUP BY g.[b]")),
+                    () -> assertTrue(plan.statement().contains("NULLIF(SUM(q.[total])")));
         }
 
         @Test
@@ -257,18 +257,18 @@ class TaqlCompilerTest {
                     top 5
                     """);
             assertAll(
-                    () -> assertTrue(plan.sql().startsWith("SELECT TOP (?)")),
-                    () -> assertTrue(plan.sql().contains("t.[ClientId] IN (?, ?)")),
-                    () -> assertTrue(plan.sql().contains("ORDER BY [TransactionValue] DESC")),
-                    () -> assertFalse(plan.sql().contains("GROUP BY")));
+                    () -> assertTrue(plan.statement().startsWith("SELECT TOP (?)")),
+                    () -> assertTrue(plan.statement().contains("t.[ClientId] IN (?, ?)")),
+                    () -> assertTrue(plan.statement().contains("ORDER BY [TransactionValue] DESC")),
+                    () -> assertFalse(plan.statement().contains("GROUP BY")));
         }
 
         @Test
         void omitsTopEntirelyWhenTheQueryDoesNotAskForOne() {
             Plan plan = compiler.compileUncached("list { transactionId }");
             assertAll(
-                    () -> assertFalse(plan.sql().contains("TOP"), plan.sql()),
-                    () -> assertTrue(plan.sql().startsWith("SELECT\n")),
+                    () -> assertFalse(plan.statement().contains("TOP"), plan.statement()),
+                    () -> assertTrue(plan.statement().startsWith("SELECT\n")),
                     () -> assertTrue(plan.parameters().isEmpty()));
         }
 
@@ -279,7 +279,7 @@ class TaqlCompilerTest {
             TaqlCompiler capped = new TaqlCompiler(DemoCatalog.create(),
                     new Resolver.Options(1000), 16, 16);
             Plan plan = capped.compileUncached("list { transactionId }");
-            assertTrue(plan.sql().startsWith("SELECT TOP (?)"));
+            assertTrue(plan.statement().startsWith("SELECT TOP (?)"));
             assertEquals(1000L, ((Plan.Constant) plan.parameters().getFirst()).value());
         }
 
@@ -314,7 +314,7 @@ class TaqlCompilerTest {
         void bindsAListVariableAsOneJsonParameterSoTheSqlStaysStable() {
             String source = "list { transactionId } over { clientId in $clients }";
             Plan plan = compiler.compile(source).plan();
-            assertTrue(plan.sql().contains("OPENJSON(?) WITH ([value] varchar(50) '$')"));
+            assertTrue(plan.statement().contains("OPENJSON(?) WITH ([value] varchar(50) '$')"));
 
             List<Object> two = compiler.compile(source).bind(Map.of("clients", List.of("1", "3")));
             List<Object> five = compiler.compile(source).bind(
@@ -336,7 +336,7 @@ class TaqlCompilerTest {
         void bindsAgainstTheColumnsPhysicalTypeNotAGenericOne() {
             Plan plan = compiler.compileUncached("list { transactionId } over { direction = 'C' }");
             Plan.Auto slot = (Plan.Auto) plan.parameters().getFirst();
-            assertEquals(new SqlType.VarChar(1), slot.sqlType());
+            assertEquals(new SqlType.VarChar(1), slot.physicalType());
         }
 
         @Test
@@ -542,8 +542,8 @@ class TaqlCompilerTest {
             Plan two = compiler.compile("list { transactionId } over { clientId in ['1','2'] }").plan();
             Plan three = compiler.compile("list { transactionId } over { clientId in ['1','2','3'] }").plan();
             assertFalse(two.shapeKey().equals(three.shapeKey()));
-            assertTrue(two.sql().contains("IN (?, ?)"));
-            assertTrue(three.sql().contains("IN (?, ?, ?)"));
+            assertTrue(two.statement().contains("IN (?, ?)"));
+            assertTrue(three.statement().contains("IN (?, ?, ?)"));
         }
 
         @Test
@@ -652,10 +652,10 @@ class TaqlCompilerTest {
             var compiled = compiler.compile(
                     "list { transactionId } over { clientId = '1''; DROP TABLE dbo.Transactions; --' }");
             assertAll(
-                    () -> assertFalse(compiled.plan().sql().contains("DROP")),
-                    () -> assertFalse(compiled.plan().sql().contains("--")),
+                    () -> assertFalse(compiled.plan().statement().contains("DROP")),
+                    () -> assertFalse(compiled.plan().statement().contains("--")),
                     () -> assertEquals("t.[ClientId] = ?",
-                            compiled.plan().sql().lines()
+                            compiled.plan().statement().lines()
                                     .filter(l -> l.startsWith("WHERE"))
                                     .findFirst().orElseThrow().substring("WHERE ".length())),
                     () -> assertEquals(payload, compiled.bind().getFirst()));
@@ -665,7 +665,7 @@ class TaqlCompilerTest {
         void hostileVariableValuesAreAlsoJustValues() {
             var compiled = compiler.compile("list { transactionId } over { clientId in $ids }");
             List<Object> values = compiled.bind(Map.of("ids", List.of("a\"; DROP TABLE x; --")));
-            assertFalse(compiled.plan().sql().contains("DROP"));
+            assertFalse(compiled.plan().statement().contains("DROP"));
             assertEquals("[\"a\\\"; DROP TABLE x; --\"]", values.getFirst());
         }
 
@@ -724,10 +724,10 @@ class TaqlCompilerTest {
 
         @Test
         void aListVariableRendersItsElementTypeIntoTheOpenjsonClause() {
-            // The type reaches the SQL text through SqlType.sql(), not as a
+            // The type reaches the SQL text through SqlType.statement(), not as a
             // string carried around from the catalog.
             assertTrue(compiler.compileUncached("list { transactionId } over { currency in $c }")
-                    .sql().contains("WITH ([value] varchar(3) '$')"));
+                    .statement().contains("WITH ([value] varchar(3) '$')"));
         }
     }
 
@@ -756,27 +756,27 @@ class TaqlCompilerTest {
         @Test
         void readingAJoinedFieldPullsInItsJoin() {
             assertTrue(joined.compileUncached("list { orderId, customerName } from orders")
-                    .sql().contains("INNER JOIN [dbo].[Customers] AS c ON o.[CustomerId] = c.[CustomerId]"));
+                    .statement().contains("INNER JOIN [dbo].[Customers] AS c ON o.[CustomerId] = c.[CustomerId]"));
         }
 
         @Test
         void aQueryThatNeverReadsTheJoinDoesNotEmitIt() {
-            assertFalse(joined.compileUncached("list { orderId } from orders").sql().contains("JOIN"));
+            assertFalse(joined.compileUncached("list { orderId } from orders").statement().contains("JOIN"));
         }
 
         @Test
         void aJoinedFieldUsedOnlyInAFilterStillPullsInItsJoin() {
             assertTrue(joined.compileUncached("list { orderId } from orders over { customerName = 'x' }")
-                    .sql().contains("INNER JOIN [dbo].[Customers]"));
+                    .statement().contains("INNER JOIN [dbo].[Customers]"));
         }
 
         @Test
         void aTableKeepsTheSameAliasAcrossQueries() {
             // Aliases are allocated per statement, but from the entity alone --
             // so they do not drift with which joins a given query happens to need.
-            assertTrue(joined.compileUncached("list { orderId } from orders").sql().contains("AS o"));
+            assertTrue(joined.compileUncached("list { orderId } from orders").statement().contains("AS o"));
             assertTrue(joined.compileUncached("list { orderId, customerName } from orders")
-                    .sql().contains("[dbo].[Orders] AS o"));
+                    .statement().contains("[dbo].[Orders] AS o"));
         }
 
         @Test
@@ -794,7 +794,7 @@ class TaqlCompilerTest {
                             Catalog.Field.from("contract", "contractRef", TaqlType.STRING, "Ref",
                                     new SqlType.VarChar(50)))))));
 
-            String sql = c.compileUncached("list { id, customerName, contractRef } from orders").sql();
+            String sql = c.compileUncached("list { id, customerName, contractRef } from orders").statement();
             assertAll(
                     () -> assertTrue(sql.contains("[dbo].[Groups] AS g2"), sql),
                     () -> assertTrue(sql.contains("INNER JOIN [dbo].[Customers] AS c ON g2.[Id] = c.[Id]"), sql),
@@ -814,7 +814,7 @@ class TaqlCompilerTest {
                             Catalog.Field.of("Amount", TaqlType.DECIMAL, new SqlType.Decimal(10, 2)))))));
 
             String sql = c.compileUncached("analysis by Country, Name { total = sum(Amount) }"
-                    + " from wires top 2 by total within Country").sql();
+                    + " from wires top 2 by total within Country").statement();
 
             assertAll(
                     // the table is pushed off 'w', which the rank level holds

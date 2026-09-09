@@ -52,16 +52,28 @@ public final class TaqlCompiler {
     private static final Logger log = LoggerFactory.getLogger(TaqlCompiler.class);
 
     private final Catalog catalog;
+    private final Backend backend;
     private final Resolver.Options options;
     private final PlanCache<String, Compiled> textCache;
     private final PlanCache<String, Plan> shapeCache;
 
     public TaqlCompiler(Catalog catalog) {
-        this(catalog, Resolver.Options.DEFAULTS, 512, 512);
+        this(catalog, new SqlServerGenerator(), Resolver.Options.DEFAULTS, 512, 512);
     }
 
     public TaqlCompiler(Catalog catalog, Resolver.Options options, int textCacheSize, int shapeCacheSize) {
+        this(catalog, new SqlServerGenerator(), options, textCacheSize, shapeCacheSize);
+    }
+
+    /**
+     * @param backend where these queries will run. One compiler serves one
+     *                backend: the shape key describes the query, not the target,
+     *                so two backends sharing a cache would collide on it.
+     */
+    public TaqlCompiler(Catalog catalog, Backend backend, Resolver.Options options,
+                        int textCacheSize, int shapeCacheSize) {
         this.catalog = catalog;
+        this.backend = backend;
         this.options = options;
         this.textCache = new PlanCache<>(textCacheSize);
         this.shapeCache = new PlanCache<>(shapeCacheSize);
@@ -89,10 +101,10 @@ public final class TaqlCompiler {
         return textCache.get(source, text -> {
             Ast.Query parsed = TaqlParserFacade.parse(text);
             Plan plan = shapeCache.get(parsed.shapeKey(), shape -> {
-                Resolver.Result resolved = Resolver.resolve(catalog, parsed, options);
-                Plan generated = SqlServerGenerator.generate(resolved.query(), resolved.variables(), shape);
+                Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, backend);
+                Plan generated = backend.generate(resolved.query(), resolved.variables(), shape);
                 log.debug("plan {} compiled, {} parameters\n{}",
-                        generated.id(), generated.parameters().size(), generated.sql().stripTrailing());
+                        generated.id(), generated.parameters().size(), generated.statement().stripTrailing());
                 log.trace("plan {} has shape {}", generated.id(), shape);
                 return generated;
             });
@@ -103,12 +115,12 @@ public final class TaqlCompiler {
     /** Parses and type-checks without consulting either cache -- for validation endpoints and tests. */
     public Plan compileUncached(String source) {
         Ast.Query parsed = TaqlParserFacade.parse(source);
-        Resolver.Result resolved = Resolver.resolve(catalog, parsed, options);
-        return SqlServerGenerator.generate(resolved.query(), resolved.variables(), parsed.shapeKey());
+        Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, backend);
+        return backend.generate(resolved.query(), resolved.variables(), parsed.shapeKey());
     }
 
     public Tam.Query analyse(String source) {
-        return Resolver.resolve(catalog, TaqlParserFacade.parse(source), options).query();
+        return Resolver.resolve(catalog, TaqlParserFacade.parse(source), options, backend).query();
     }
 
     public PlanCache<String, Compiled> textCache() {
@@ -121,5 +133,9 @@ public final class TaqlCompiler {
 
     public Catalog catalog() {
         return catalog;
+    }
+
+    public Backend backend() {
+        return backend;
     }
 }

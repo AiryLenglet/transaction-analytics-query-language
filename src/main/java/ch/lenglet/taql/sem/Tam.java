@@ -1,6 +1,6 @@
 package ch.lenglet.taql.sem;
 
-import ch.lenglet.taql.SqlType;
+import ch.lenglet.taql.PhysicalType;
 import ch.lenglet.taql.TaqlType;
 import ch.lenglet.taql.catalog.Catalog;
 
@@ -10,7 +10,9 @@ import java.util.Set;
 /**
  * The typed analytics model.
  *
- * Everything here is resolved and physical: names have become
+ * Everything here is resolved and physical, but not dialect-specific: a value
+ * carries a {@link PhysicalType} without this model knowing whose it is, so the
+ * only stage that names a dialect is the generator. Names have become
  * {@link Column}s carrying a table alias, implicit conversions have been made
  * explicit, and every value is either a {@link LiteralRef} (index into the
  * per-query literal table) or a {@link Variable} (a named $param). There are no
@@ -34,10 +36,10 @@ public final class Tam {
     public record Column(Catalog.Field field, TaqlType type) implements Expr {}
 
     /** Auto-parameterised constant: the value is literals[slot] of the *calling* query. */
-    public record LiteralRef(int slot, TaqlType type, SqlType sqlType) implements Expr {}
+    public record LiteralRef(int slot, TaqlType type, PhysicalType physicalType) implements Expr {}
 
     /** A named query variable supplied at execution time. */
-    public record Variable(String name, TaqlType type, SqlType sqlType) implements Expr {}
+    public record Variable(String name, TaqlType type, PhysicalType physicalType) implements Expr {}
 
     public record NullValue(TaqlType type) implements Expr {}
 
@@ -46,7 +48,7 @@ public final class Tam {
      * default row cap). It is shape-invariant, so unlike a {@link LiteralRef}
      * it is safe to store its value inside a cached plan.
      */
-    public record Constant(Object value, TaqlType type, SqlType sqlType) implements Expr {}
+    public record Constant(Object value, TaqlType type, PhysicalType physicalType) implements Expr {}
 
     public record Unary(String op, Expr operand, TaqlType type) implements Expr {}
 

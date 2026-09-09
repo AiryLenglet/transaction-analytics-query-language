@@ -61,7 +61,7 @@ class CidTest {
     void theGeneratedSqlAndShapeKeyAreValueFreeSoBothAreSafeToLog() {
         // This is what the library does log, and why it is allowed to.
         var plan = compiler.compileUncached("list { TransactionId } over { ClientId = '" + CID + "' }");
-        assertFalse(plan.sql().contains(CID), plan.sql());
+        assertFalse(plan.statement().contains(CID), plan.statement());
         assertFalse(plan.shapeKey().contains(CID), plan.shapeKey());
     }
 

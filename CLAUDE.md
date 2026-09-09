@@ -38,11 +38,15 @@ What is safe to log is a deliberate line: the shape key and the generated SQL ar
 ```
 text → TaqlParserFacade (ANTLR)  → parse tree
      → AstBuilder                → Ast          untyped syntax model, LITERALS LIFTED OUT
-     → Resolver (+ Catalog)      → Tam          typed, resolved, physical
-     → SqlServerGenerator        → Plan         SQL text + parameter recipe
+     → Resolver (+ Catalog)      → Tam          typed, resolved, store-agnostic
+     → Backend.generate          → Plan         statement text + parameter recipe
      → Binder                    → JDBC values
      → TaqlTemplate              → List<Map<String,Object>>
 ```
+
+Everything above `Backend` is store-agnostic and must stay that way: `Tam` and `Plan` carry a `PhysicalType`, never a `SqlType`. `Backend` is the single seam where a query becomes T-SQL — it supplies both the statement and the default physical type for a value no column has typed, which is why the resolver takes one. `SqlServerGenerator` is the only implementation; `grep -l SqlType src/main/java` shows exactly which files are dialect-specific, and that list should not grow.
+
+Two things a second backend needs that are deliberately **not** designed yet, because they cannot be designed well from one implementation: an execution seam (`runtime` is JDBC to its bones — connection, error taxonomy, driver), and a capability model so a backend that cannot express a construct — window functions have no analogue outside SQL — yields a positioned diagnostic instead of the generator throwing `IllegalStateException`. `Catalog` is the third: its types are neutral now, but `Table`/`Join`/`Field.column` describe rows matched on key columns, which is not how a graph is addressed.
 
 `TaqlCompiler` is the façade over the whole thing plus both caches. `compileUncached` bypasses the caches and is what most tests call.
 
