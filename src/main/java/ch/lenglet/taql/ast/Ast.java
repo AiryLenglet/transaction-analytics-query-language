@@ -32,7 +32,7 @@ public final class Ast {
     // Expressions
     // ------------------------------------------------------------------
 
-    public sealed interface Expr permits FieldRef, Lit, Param, Unary, Binary, Call, MatchValue, MatchCond {
+    public sealed interface Expr permits FieldRef, Lit, Unary, Binary, Call, MatchValue, MatchCond {
         Pos pos();
     }
 
@@ -41,9 +41,6 @@ public final class Ast {
 
     /** A literal *hole*: the value lives in {@link Query#literals()} at {@code slot}. */
     public record Lit(int slot, LitKind kind, Pos pos) implements Expr {}
-
-    /** An explicit query variable, e.g. {@code $clientIds}. */
-    public record Param(String name, Pos pos) implements Expr {}
 
     public record Unary(String op, Expr operand, Pos pos) implements Expr {}
 
@@ -64,7 +61,7 @@ public final class Ast {
     // Predicates
     // ------------------------------------------------------------------
 
-    public sealed interface Pred permits And, Or, Not, Compare, InList, InRange, InVariable, IsNull, Like {
+    public sealed interface Pred permits And, Or, Not, Compare, InList, InRange, IsNull, Like {
         Pos pos();
     }
 
@@ -79,9 +76,6 @@ public final class Ast {
     public record InList(Expr subject, List<Expr> items, boolean negated, Pos pos) implements Pred {}
 
     public record InRange(Expr subject, Expr low, Expr high, boolean negated, Pos pos) implements Pred {}
-
-    /** {@code x in $someList} -- arity unknown until bind time. */
-    public record InVariable(Expr subject, Param variable, boolean negated, Pos pos) implements Pred {}
 
     public record IsNull(Expr subject, boolean negated, Pos pos) implements Pred {}
 
@@ -114,7 +108,7 @@ public final class Ast {
 
     public record SortItem(Expr expr, boolean descending, Pos pos) {}
 
-    /** {@code count} is a {@link Lit} or {@link Param}; {@code byMeasure} names a measure alias. */
+    /** {@code count} is a {@link Lit}; {@code byMeasure} names a measure alias. */
     /** {@code within} turns a global TOP into a per-group rank filter. */
     public record Top(Expr count, String byMeasure, List<String> within, Pos pos) {}
 

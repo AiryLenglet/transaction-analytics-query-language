@@ -294,174 +294,59 @@ class TaqlCompilerTest {
         }
     }
 
-    // ==================================================================
-    @Nested
-    @DisplayName("variables and binding")
-    class Variables {
-
-        @Test
-        void infersVariableTypesFromTheirUseSite() {
-            Plan plan = compiler.compileUncached("""
-                    list { transactionId }
-                    over { clientId in $clients, TransactionDate in $from..$to }
-                    top $limit
-                    """);
-            assertAll(
-                    () -> assertEquals(TaqlType.listOf(TaqlType.STRING), plan.variables().get("clients")),
-                    () -> assertEquals(TaqlType.DATE, plan.variables().get("from")),
-                    () -> assertEquals(TaqlType.DATE, plan.variables().get("to")),
-                    () -> assertEquals(TaqlType.INTEGER, plan.variables().get("limit")));
-        }
-
-        @Test
-        void bindsAListVariableAsOneJsonParameterSoTheSqlStaysStable() {
-            String source = "list { transactionId } over { clientId in $clients }";
-            Plan plan = compiler.compile(source).plan();
-            assertTrue(plan.statement().contains("OPENJSON(?) WITH ([value] varchar(50) '$')"));
-
-            List<Object> two = compiler.compile(source).bind(Map.of("clients", List.of("1", "3")));
-            List<Object> five = compiler.compile(source).bind(
-                    Map.of("clients", List.of("1", "2", "3", "4", "5")));
-            assertEquals("[\"1\",\"3\"]", two.getFirst());
-            assertEquals("[\"1\",\"2\",\"3\",\"4\",\"5\"]", five.getFirst());
-            assertEquals(two.size(), five.size(), "arity must not change the parameter count");
-        }
-
-        @Test
-        void convertsLiteralsToTheColumnType() {
-            List<Object> values = compiler.compile(
-                    "list { transactionId } over { TransactionDate in '2010-01-01'..'2019-12-31' }").bind();
-            assertEquals(java.time.LocalDate.of(2010, 1, 1), values.get(0));
-            assertEquals(java.time.LocalDate.of(2019, 12, 31), values.get(1));
-        }
-
-        @Test
-        void bindsAgainstTheColumnsPhysicalTypeNotAGenericOne() {
-            Plan plan = compiler.compileUncached("list { transactionId } over { direction = 'C' }");
-            Plan.Auto slot = (Plan.Auto) plan.parameters().getFirst();
-            assertEquals(new SqlType.VarChar(1), slot.physicalType());
-        }
-
-        @Test
-        void theVariableContractKeepsAStableOrder() {
-            // plan.variables() is published as the endpoint's schema, so a
-            // generated document must not reshuffle its own properties between
-            // restarts. Map.copyOf randomises iteration order per JVM, so this
-            // asserts the order itself -- checking only that two calls agree
-            // would pass in a single JVM even when it is randomised.
-            Plan plan = compiler.compileUncached("""
-                    analysis by country { total = sum(TransactionValue) }
-                    over { clientId in $clients, TransactionDate in $from..$to }
-                    top $limit by total
-                    """);
-            assertEquals(List.of("clients", "from", "to", "limit"),
-                    List.copyOf(plan.variables().keySet()),
-                    "variables should be listed in order of first use");
-        }
-
-        @Test
-        void reportsAMissingVariable() {
-            TaqlException e = assertThrows(TaqlException.class,
-                    () -> compiler.compile("list { transactionId } over { clientId = $who }").bind());
-            assertTrue(e.getMessage().contains("missing value for query variable $who"));
-        }
-    }
 
     // ==================================================================
     @Nested
     @DisplayName("binding")
     class Binding {
 
-        private List<Object> bind(String query, String name, Object value) {
-            return compiler.compile(query).bind(java.util.Collections.singletonMap(name, value));
+        private List<Object> bind(String query) {
+            return compiler.compile(query).bind().values();
         }
 
-        private TaqlException rejected(String query, String name, Object value) {
-            return assertThrows(TaqlException.class, () -> bind(query, name, value));
-        }
-
-        private static final String STRING_VAR = "list { TransactionId } over { Country = $c }";
-        private static final String INT_VAR = "list { TransactionId } top $n";
-        private static final String DATE_VAR = "list { TransactionId } over { TransactionDate > $d }";
-
-        @Test
-        void aValueThatIsNotTheAdvertisedTypeIsRejectedNotRendered() {
-            // Plan.variables() publishes $c as a string. toString() would accept
-            // all of these and bind their rendering -- parameterised, so not
-            // injectable, but silently asking a question nobody meant to ask.
-            for (Object wrong : List.of(42, List.of("a", "b"), Map.of("k", "v"), new int[]{1, 2}, true)) {
-                TaqlException e = rejected(STRING_VAR, "c", wrong);
-                assertTrue(e.getMessage().contains("$c expects text"), e.getMessage());
-            }
-            assertEquals(List.of("CH"), bind(STRING_VAR, "c", "CH"));
+        private TaqlException rejected(String query) {
+            return assertThrows(TaqlException.class, () -> bind(query));
         }
 
         @Test
-        void structuresAreNamedByTypeAndNeverEchoedIntoTheMessage() {
-            // The message may be logged or returned, so caller data stays out of it.
-            String message = rejected(STRING_VAR, "c", Map.of("secret", "hunter2")).getMessage();
-            assertFalse(message.contains("hunter2"), message);
-            assertFalse(message.contains("secret"), message);
+        void aConstantIsBoundAsTheTypeOfWhatItIsComparedAgainst() {
+            // '2010-01-01' next to a date column is a date, not text -- which is
+            // the difference between seeking an index and converting every row.
+            assertEquals(List.of(java.time.LocalDate.of(2010, 1, 1)),
+                    bind("list { TransactionId } over { TransactionDate > '2010-01-01' }"));
+            assertEquals(List.of(new java.math.BigDecimal("500")),
+                    bind("list { TransactionId } over { TransactionValue > 500 }"));
+            assertEquals(List.of("CH"),
+                    bind("list { TransactionId } over { Country = 'CH' }"));
         }
 
         @Test
-        void textIsStillAcceptedForTypesJsonCannotCarry() {
-            // JSON has no date type and one number type, so text has to work --
-            // but it has to parse exactly.
-            assertEquals(List.of(java.time.LocalDate.of(2019, 12, 31)), bind(DATE_VAR, "d", "2019-12-31"));
-            assertEquals(List.of(7L), bind(INT_VAR, "n", "7"));
-
-            assertTrue(rejected(DATE_VAR, "d", "31/12/2019").getMessage().contains("a date like"));
-            assertTrue(rejected(INT_VAR, "n", "abc").getMessage().contains("a whole number"));
-        }
-
-        @Test
-        void aFractionIsNotAWholeNumberButAnIntegralDoubleIs() {
-            // JSON numbers arrive as Double, so 4.0 has to mean 4 -- while
-            // Number#longValue would have quietly turned 3.7 into 3.
-            assertEquals(List.of(4L), bind(INT_VAR, "n", 4.0));
-            assertTrue(rejected(INT_VAR, "n", 3.7).getMessage().contains("a whole number"));
-            // Wider than a long, rather than wrapping.
-            assertTrue(rejected(INT_VAR, "n", 1.0e20).getMessage().contains("a whole number"));
+        void aConstantThatCannotBecomeTheColumnsTypeIsRejected() {
+            // The resolver lets text stand where a date or a number is wanted --
+            // that is how '2010-01-01' works at all -- so the text has to parse.
+            assertTrue(rejected("list { TransactionId } over { TransactionDate > '31/12/2019' }")
+                    .getMessage().contains("a date like"));
+            assertTrue(rejected("list { TransactionId } over { TransactionValue > 'abc' }")
+                    .getMessage().contains("a number"));
         }
 
         @Test
         void aDecimalKeepsThePrecisionItWasWrittenWith() {
-            // new BigDecimal(0.1d) would bind 0.1000000000000000055511151231257827.
             assertEquals(List.of(new java.math.BigDecimal("0.1")),
-                    bind("list { TransactionId } over { TransactionValue > $v }", "v", 0.1));
+                    bind("list { TransactionId } over { TransactionValue > 0.1 }"));
         }
 
         @Test
-        void anUnparseableBooleanIsRejectedRatherThanReadAsFalse() {
-            // Boolean.parseBoolean answers false for "yes", "1" and everything
-            // else, which is a wrong answer dressed as a valid one.
-            TaqlCompiler flags = new TaqlCompiler(new Catalog(Map.of("t", new Catalog.Entity(
-                    "t", new Catalog.Table("dbo", "T"), List.of(),
-                    List.of(Catalog.Field.of("id", TaqlType.STRING, new SqlType.VarChar(10)),
-                            Catalog.Field.of("active", TaqlType.BOOLEAN, new SqlType.Bit()))))));
-            String query = "list { id } from t over { active = $on }";
-
-            assertEquals(List.of(true), flags.compile(query).bind(Map.of("on", true)));
-            assertEquals(List.of(false), flags.compile(query).bind(Map.of("on", "false")));
-
-            TaqlException e = assertThrows(TaqlException.class,
-                    () -> flags.compile(query).bind(Map.of("on", "yes")));
-            assertTrue(e.getMessage().contains("$on expects true or false"), e.getMessage());
-        }
-
-        @Test
-        void aBadListElementIsNamedByItsPosition() {
-            String query = "list { TransactionId } over { Country in $cs }";
-            TaqlException e = assertThrows(TaqlException.class,
-                    () -> compiler.compile(query).bind(Map.of("cs", List.of("CH", 42))));
-            assertTrue(e.getMessage().contains("$cs[1] expects text"), e.getMessage());
-
-            TaqlException notAList = assertThrows(TaqlException.class,
-                    () -> compiler.compile(query).bind(Map.of("cs", "CH")));
-            assertTrue(notAList.getMessage().contains("$cs must be a list"), notAList.getMessage());
+        void aRejectionNamesTheValueButNotWhereItCameFrom() {
+            // The message is returned to the caller, so it says what was wrong
+            // with the constant and nothing about the row it would have matched.
+            String message = rejected("list { TransactionId } over { TransactionDate > '31/12/2019' }")
+                    .getMessage();
+            assertTrue(message.contains("31/12/2019"), message);
+            assertFalse(message.contains("TransactionDate"), message);
         }
     }
+
 
     // ==================================================================
     @Nested
@@ -561,8 +446,8 @@ class TaqlCompilerTest {
             var first = compiler.compile("list { transactionId } over { clientId = '1' }");
             var second = compiler.compile("list { transactionId } over { clientId = '999' }");
             assertSame(first.plan(), second.plan());
-            assertEquals("1", first.bind().getFirst());
-            assertEquals("999", second.bind().getFirst());
+            assertEquals("1", first.bind().values().getFirst());
+            assertEquals("999", second.bind().values().getFirst());
         }
 
         @Test
@@ -592,8 +477,8 @@ class TaqlCompilerTest {
             var first = compiler.compile(a);
             var second = compiler.compile(b);
             assertSame(first.plan(), second.plan());
-            assertEquals(List.of("1", "2", "C", new java.math.BigDecimal("10")), first.bind());
-            assertEquals(List.of("8", "9", "D", new java.math.BigDecimal("99")), second.bind());
+            assertEquals(List.of("1", "2", "C", new java.math.BigDecimal("10")), first.bind().values());
+            assertEquals(List.of("8", "9", "D", new java.math.BigDecimal("99")), second.bind().values());
         }
 
         @Test
@@ -648,12 +533,12 @@ class TaqlCompilerTest {
             var compiled = compiler.compile(
                     "list { TransactionId } over { TransactionValue > 500 } sort by TransactionId top 5");
             // TOP is emitted before WHERE, so that is the parameter order.
-            assertEquals(List.of(5L, new java.math.BigDecimal("500")), compiled.bind());
+            assertEquals(List.of(5L, new java.math.BigDecimal("500")), compiled.bind().values());
 
             var other = compiler.compile(
                     "list { TransactionId } over { TransactionValue > 20 } sort by TransactionId top 7");
             assertSame(compiled.plan(), other.plan());
-            assertEquals(List.of(7L, new java.math.BigDecimal("20")), other.bind());
+            assertEquals(List.of(7L, new java.math.BigDecimal("20")), other.bind().values());
         }
 
         @Test
@@ -684,8 +569,8 @@ class TaqlCompilerTest {
             var second = uncached.compile(query);
 
             assertAll(
-                    () -> assertEquals(List.of(5L, new java.math.BigDecimal("500")), first.bind()),
-                    () -> assertEquals(first.bind(), second.bind()),
+                    () -> assertEquals(List.of(5L, new java.math.BigDecimal("500")), first.bind().values()),
+                    () -> assertEquals(first.bind().values(), second.bind().values()),
                     () -> assertEquals(first.plan().statement(), second.plan().statement()),
                     // ...and it really did compile twice
                     () -> assertNotSame(first.plan(), second.plan()));
@@ -730,15 +615,16 @@ class TaqlCompilerTest {
                             compiled.plan().statement().lines()
                                     .filter(l -> l.startsWith("WHERE"))
                                     .findFirst().orElseThrow().substring("WHERE ".length())),
-                    () -> assertEquals(payload, compiled.bind().getFirst()));
+                    () -> assertEquals(payload, compiled.bind().values().getFirst()));
         }
 
         @Test
-        void hostileVariableValuesAreAlsoJustValues() {
-            var compiled = compiler.compile("list { transactionId } over { clientId in $ids }");
-            List<Object> values = compiled.bind(Map.of("ids", List.of("a\"; DROP TABLE x; --")));
+        void aHostileValueInsideAListIsStillJustAValue() {
+            var compiled = compiler.compile(
+                    "list { transactionId } over { clientId in ['ok', 'a''; DROP TABLE x; --'] }");
             assertFalse(compiled.plan().statement().contains("DROP"));
-            assertEquals("[\"a\\\"; DROP TABLE x; --\"]", values.getFirst());
+            assertTrue(compiled.plan().statement().contains("IN (?, ?)"), compiled.plan().statement());
+            assertEquals(List.of("ok", "a'; DROP TABLE x; --"), compiled.bind().values());
         }
 
         @Test
@@ -792,14 +678,6 @@ class TaqlCompilerTest {
                     () -> assertTrue(new SqlType.NChar(50).unicode()),
                     () -> assertFalse(new SqlType.VarChar(50).unicode()),
                     () -> assertFalse(new SqlType.Date().unicode()));
-        }
-
-        @Test
-        void aListVariableRendersItsElementTypeIntoTheOpenjsonClause() {
-            // The type reaches the SQL text through SqlType.statement(), not as a
-            // string carried around from the catalog.
-            assertTrue(compiler.compileUncached("list { transactionId } over { currency in $c }")
-                    .statement().contains("WITH ([value] varchar(3) '$')"));
         }
     }
 
@@ -947,13 +825,6 @@ class TaqlCompilerTest {
             TaqlException e = assertThrows(TaqlException.class,
                     () -> compiler.compileUncached("analysis by country { bad = sum(currency) }"));
             assertTrue(e.getMessage().contains("sum() needs a numeric argument"));
-        }
-
-        @Test
-        void conflictingVariableUsesAreReported() {
-            TaqlException e = assertThrows(TaqlException.class, () -> compiler.compileUncached(
-                    "list { transactionId } over { clientId = $x, TransactionValue > $x }"));
-            assertTrue(e.getMessage().contains("is used as"));
         }
 
         @Test

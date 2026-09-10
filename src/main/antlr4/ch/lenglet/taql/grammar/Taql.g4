@@ -3,6 +3,9 @@ grammar Taql;
 // =====================================================================
 //  TAQL - Transaction Analytics Query Language
 //
+//  A query states its own values. There are no placeholders to fill in: what
+//  a query asks for is what it says, and a reader needs nothing but the text.
+//
 //  Two statement shapes share one filter / expression language:
 //
 //    analysis by <keys> { <measures> } over { <filters> } top N by <m>
@@ -34,7 +37,7 @@ overClause     : OVER LBRACE (predicate (COMMA? predicate)*)? RBRACE ;
 sortClause     : SORT BY sortItem (COMMA? sortItem)* ;
 sortItem       : expression (ASC | DESC)? ;
 topClause      : TOP countExpr (BY identifier)? withinClause? ;
-countExpr      : INT | PARAM ;
+countExpr      : INT ;
 
 // ---------- analysis ----------
 
@@ -77,7 +80,6 @@ compareOp      : EQ | NEQ | LT | LTE | GT | GTE ;
 
 inSource       : listLiteral                               # InList
                | expression RANGE expression               # InRange
-               | expression                                # InVariable
                ;
 
 listLiteral    : LBRACKET (expression (COMMA expression)*)? RBRACKET ;
@@ -91,7 +93,6 @@ expression     : LPAREN expression RPAREN                              # ParenEx
                | matchExpr                                             # MatchWrapper
                | identifier LPAREN (expression (COMMA expression)*)? RPAREN # CallExpr
                | literal                                               # LiteralExpr
-               | PARAM                                                 # ParamExpr
                | identifier                                            # FieldExpr
                ;
 
@@ -162,10 +163,6 @@ LBRACKET  : '[' ;
 RBRACKET  : ']' ;
 
 UNDERSCORE : '_' ;
-
-// A named query variable: the whole point of these is that they never
-// reach the generated SQL as text -- they become bind slots.
-PARAM        : '$' [a-zA-Z_] [a-zA-Z_0-9]* ;
 
 DECIMAL_LIT  : [0-9]+ '.' [0-9]+ ;
 INT          : [0-9]+ ;

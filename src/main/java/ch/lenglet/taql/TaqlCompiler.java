@@ -15,7 +15,6 @@ import ch.lenglet.taql.sql.SqlServerGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -110,12 +109,15 @@ public final class TaqlCompiler {
     /** A plan together with the literal values of the specific query text it came from. */
     public record Compiled(Plan plan, List<Object> literals) {
 
-        public List<Object> bind(Map<String, Object> variables) {
-            return Binder.resolve(plan, literals, variables);
-        }
+        /**
+         * Everything one call needs. The two travel together because they must
+         * agree: the policy authorises {@link #restrictions()} and the store runs
+         * {@link #values()}.
+         */
+        public record Bound(List<Object> values, Restrictions restrictions) {}
 
-        public List<Object> bind() {
-            return bind(Map.of());
+        public Bound bind() {
+            return new Bound(Binder.resolve(plan, literals), restrictionsOf());
         }
 
         /**
@@ -128,13 +130,12 @@ public final class TaqlCompiler {
          * type forces a conversion, and an identifier compared for equality is a
          * string either way.
          */
-        public Restrictions restrictions(Map<String, Object> variables) {
+        private Restrictions restrictionsOf() {
             Map<String, Set<Object>> resolved = new LinkedHashMap<>();
             plan.restrictions().forEach((field, conjuncts) -> {
                 Set<Object> values = null;
                 for (Plan.Restriction conjunct : conjuncts) {
-                    Set<Object> pinned = valuesOf(conjunct, variables);
-                    if (pinned == null) continue;           // this one is unknowable
+                    Set<Object> pinned = valuesOf(conjunct);
                     // Several conjuncts on one field all hold at once.
                     if (values == null) values = pinned;
                     else values.retainAll(pinned);
@@ -144,19 +145,11 @@ public final class TaqlCompiler {
             return new Restrictions(resolved);
         }
 
-        /** Null when any reference cannot be read, which makes the conjunct unusable. */
-        private Set<Object> valuesOf(Plan.Restriction conjunct, Map<String, Object> variables) {
+        private Set<Object> valuesOf(Plan.Restriction conjunct) {
             Set<Object> values = new LinkedHashSet<>();
             for (Plan.ValueRef ref : conjunct.values()) {
                 switch (ref) {
                     case Plan.ValueRef.Lit l -> values.add(literals.get(l.slot()));
-                    case Plan.ValueRef.Var v -> {
-                        if (!variables.containsKey(v.name())) return null;
-                        Object supplied = variables.get(v.name());
-                        // 'in $list' contributes every element, '= $x' just itself.
-                        if (supplied instanceof Collection<?> many) values.addAll(many);
-                        else values.add(supplied);
-                    }
                 }
             }
             return values;
@@ -174,7 +167,7 @@ public final class TaqlCompiler {
             Ast.Query parsed = parser.parse(text);
             Plan plan = shapeCache.get(parsed.shapeKey(), shape -> {
                 Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, translator);
-                Plan generated = translator.translate(resolved.query(), resolved.variables(), shape)
+                Plan generated = translator.translate(resolved.query(), shape)
                         .restrictedBy(FilterRestrictions.of(resolved.query()));
                 log.debug("plan {} compiled, {} parameters\n{}",
                         generated.id(), generated.parameters().size(), generated.statement().stripTrailing());
@@ -189,7 +182,7 @@ public final class TaqlCompiler {
     public Plan compileUncached(String source) {
         Ast.Query parsed = parser.parse(source);
         Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, translator);
-        return translator.translate(resolved.query(), resolved.variables(), parsed.shapeKey())
+        return translator.translate(resolved.query(), parsed.shapeKey())
                 .restrictedBy(FilterRestrictions.of(resolved.query()));
     }
 

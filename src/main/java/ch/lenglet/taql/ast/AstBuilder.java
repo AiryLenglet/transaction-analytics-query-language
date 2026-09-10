@@ -204,9 +204,7 @@ public final class AstBuilder {
     private Ast.Top top(Clauses clauses) {
         if (clauses.top == null) return null;
         TaqlParser.TopClauseContext t = clauses.top.topClause();
-        Ast.Expr count = t.countExpr().PARAM() != null
-                ? new Ast.Param(paramName(t.countExpr().PARAM()), pos(t))
-                : lit(integer(t.countExpr().INT(), pos(t)), Ast.LitKind.INTEGER, pos(t));
+        Ast.Expr count = lit(integer(t.countExpr().INT(), pos(t)), Ast.LitKind.INTEGER, pos(t));
         return new Ast.Top(count, t.identifier() != null ? name(t.identifier()) : null,
                 within(t.withinClause()), pos(t));
     }
@@ -280,13 +278,6 @@ public final class AstBuilder {
             }
             case TaqlParser.InRangeContext r ->
                     new Ast.InRange(subject, expr(r.expression(0)), expr(r.expression(1)), negated, pos(ctx));
-            case TaqlParser.InVariableContext v -> {
-                Ast.Expr e = expr(v.expression());
-                if (!(e instanceof Ast.Param p)) {
-                    throw error(v, "'in' expects a list [...], a range a..b, or a $variable");
-                }
-                yield new Ast.InVariable(subject, p, negated, pos(ctx));
-            }
             default -> throw error(ctx, "unsupported 'in' source");
         };
     }
@@ -320,7 +311,6 @@ public final class AstBuilder {
                 yield new Ast.Call(name(c.identifier()), false, args, pos(c));
             }
             case TaqlParser.LiteralExprContext c -> literal(c.literal());
-            case TaqlParser.ParamExprContext c -> new Ast.Param(paramName(c.PARAM()), pos(c));
             case TaqlParser.FieldExprContext c -> new Ast.FieldRef(name(c.identifier()), pos(c));
             default -> throw error(ctx, "unsupported expression");
         };
@@ -428,10 +418,6 @@ public final class AstBuilder {
     private static String name(TaqlParser.IdentifierContext ctx) {
         String text = ctx.getText();
         return ctx.QUOTED_IDENT() != null ? text.substring(1, text.length() - 1) : text;
-    }
-
-    private static String paramName(TerminalNode param) {
-        return param.getText().substring(1);
     }
 
     /** {@code list { TransactionId }} names its column after the field it reads. */

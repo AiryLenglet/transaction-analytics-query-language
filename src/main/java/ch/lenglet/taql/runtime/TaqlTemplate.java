@@ -94,15 +94,16 @@ public final class TaqlTemplate {
     public List<Map<String, Object>> execute(TaqlQuery query) {
         TaqlCompiler.Compiled compiled = compiler.compile(query.source());
         Plan plan = compiled.plan();
-        List<Object> values = compiled.bind(query.variables());
+        // One binding, so the values the policy judges are the values that run.
+        TaqlCompiler.Compiled.Bound bound = compiled.bind();
 
         // After binding, because the values are the half of the question the plan
         // does not hold; before running, because refusing afterwards is not refusing.
-        policy.check(query, compiled.restrictions(query.variables()));
+        policy.check(query, bound.restrictions());
 
         for (int attempt = 1; ; attempt++) {
             try {
-                return runner.run(plan, values);
+                return runner.run(plan, bound.values());
             } catch (TaqlExecutionException e) {
                 if (!e.failure().worthRetrying() || attempt == options.maxAttempts()) {
                     // Re-thrown so the attempt count reflects the whole call; a

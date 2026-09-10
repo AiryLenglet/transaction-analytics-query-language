@@ -13,9 +13,9 @@ import java.sql.Types;
  * {@code date}, and parameters have to be bound in terms of the latter. Modelled
  * as a closed hierarchy rather than a string for three reasons:
  *
- *   1. {@link #sql()} is the only way a type reaches generated SQL. The
- *      {@code OPENJSON ... WITH} clause has to name a type, and rendering one
- *      from a record beats splicing in whatever string the catalog held.
+ *   1. {@link #sql()} is the only way a type reaches generated SQL, and
+ *      rendering one from a record beats splicing in whatever string a catalog
+ *      happened to hold.
  *   2. Whether a type is Unicode is a property of the type, so {@link #unicode()}
  *      can drive {@code setNString} vs {@code setString} per parameter instead
  *      of relying on a connection-wide switch.

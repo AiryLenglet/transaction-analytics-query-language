@@ -18,12 +18,17 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
  * Runs every query in example.taql through a {@link TaqlTemplate}.
+ *
+ * The examples state their own constants, so there is nothing for this driver
+ * to supply: a query arrives as text and runs. Values a caller would vary per
+ * request are what {@code $variables} are for, and the compiler advertises them
+ * on {@code Plan.variables()} -- but demonstrating that needs a caller, and this
+ * is a file of queries.
  *
  * The template is the whole API, so this driver never touches the compiler: the
  * generated SQL, the plan cache hits and the parameter counts all arrive as
@@ -38,12 +43,6 @@ import java.util.Map;
 public final class Main {
 
     private static final Logger log = LoggerFactory.getLogger(Main.class);
-
-    private static final Map<String, Object> VARIABLES = new LinkedHashMap<>(Map.of(
-            "clients", List.of("1", "3"),
-            "from", "2010-01-01",
-            "to", "2019-12-31",
-            "limit", 10));
 
     public static void main(String[] args) throws Exception {
         TaqlTemplate template;
@@ -74,7 +73,7 @@ public final class Main {
 
     private static void run(TaqlTemplate template, String source) {
         try {
-            report(template.execute(TaqlQuery.of(source, VARIABLES)));
+            report(template.execute(TaqlQuery.of(source)));
         } catch (TaqlException e) {
             // Everything the caller could have written differently, with a position.
             e.diagnostics().forEach(d -> log.info("  rejected: {}", d));

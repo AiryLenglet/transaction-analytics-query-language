@@ -29,9 +29,9 @@ import java.util.Set;
  *     explicit here rather than left to the database: `date in '2010-01-01'..`
  *     types those string literals as DATE, so they bind as dates and the query
  *     can still seek on an index instead of converting the column.
- *  3. <b>Variable typing.</b> Every {@code $name} gets a type inferred from its
- *     use site, so the plan can tell a REST caller exactly which variables it
- *     needs and what shape they must be.
+ *  3. <b>Elaboration.</b> Every value ends up as a {@link Tam.LiteralRef} carrying
+ *     the physical type of whatever it is compared against, so it binds as the
+ *     thing the column actually is.
  */
 public final class Resolver {
 
@@ -53,7 +53,6 @@ public final class Resolver {
     private final QueryTranslator translator;
     private final List<Diagnostic> errors = new ArrayList<>();
     private final Set<String> requiredJoins = new LinkedHashSet<>();
-    private final Map<String, TaqlType> variableTypes = new LinkedHashMap<>();
 
     private Catalog.Entity entity;
 
@@ -63,16 +62,13 @@ public final class Resolver {
         this.translator = translator;
     }
 
-    public record Result(Tam.Query query, Map<String, TaqlType> variables) {}
+    public record Result(Tam.Query query) {}
 
     public static Result resolve(Catalog catalog, Ast.Query parsed, Options options, QueryTranslator translator) {
         Resolver r = new Resolver(catalog, options, translator);
         Tam.Query query = r.statement(parsed.stmt());
-        r.checkAllVariablesTyped();
         if (!r.errors.isEmpty()) throw new TaqlException(r.errors);
-        // Insertion-ordered: the plan publishes this as its contract, and
-        // Map.copyOf would randomise the order per JVM. See Plan's constructor.
-        return new Result(query, Collections.unmodifiableMap(new LinkedHashMap<>(r.variableTypes)));
+        return new Result(query);
     }
 
     // ------------------------------------------------------------------
@@ -206,7 +202,6 @@ public final class Resolver {
         }
         return switch (top.count()) {
             case Ast.Lit l -> new Tam.LiteralRef(l.slot(), TaqlType.INTEGER, translator.defaultTypeFor(TaqlType.INTEGER));
-            case Ast.Param p -> variable(p, TaqlType.INTEGER, translator.defaultTypeFor(TaqlType.INTEGER));
             default -> throw fail(top.pos(), Diagnostic.Phase.TYPE, "'top' expects a number or a $variable");
         };
     }
@@ -338,12 +333,6 @@ public final class Resolver {
                         unify(subject, expr(r.high(), false), r.pos()),
                         r.negated());
             }
-            case Ast.InVariable v -> {
-                Tam.Expr subject = expr(v.subject(), false);
-                // The variable holds a *list* of whatever the subject is.
-                Tam.Variable var = variable(v.variable(), TaqlType.listOf(subject.type()), sqlTypeOf(subject));
-                yield new Tam.InVariable(subject, var, v.negated());
-            }
             case Ast.IsNull n -> new Tam.IsNull(expr(n.subject(), false), n.negated());
             case Ast.Like l -> {
                 Tam.Expr subject = expr(l.subject(), false);
@@ -368,8 +357,6 @@ public final class Resolver {
                     ? new Tam.NullValue(TaqlType.NULL)
                     : new Tam.LiteralRef(l.slot(), litType(l.kind()), sqlTypeFor(litType(l.kind())));
 
-            // Untyped for now; a use site will refine it via coerce()/unify().
-            case Ast.Param p -> variable(p, TaqlType.NULL, null);
 
             case Ast.Unary u -> {
                 Tam.Expr operand = expr(u.operand(), insideAggregate);
@@ -524,8 +511,6 @@ public final class Resolver {
             if (sqlType == null) return e;
             return switch (e) {
                 case Tam.LiteralRef l -> l.physicalType().equals(sqlType) ? l : new Tam.LiteralRef(l.slot(), target, sqlType);
-                case Tam.Variable v -> v.physicalType() != null && v.physicalType().equals(sqlType)
-                        ? v : retypeVariable(v, target, sqlType, pos);
                 default -> e;
             };
         }
@@ -533,11 +518,6 @@ public final class Resolver {
         switch (e) {
             case Tam.LiteralRef l -> {
                 if (convertible(l.type(), target)) return new Tam.LiteralRef(l.slot(), target, effective);
-            }
-            case Tam.Variable v -> {
-                if (v.type().kind() == TaqlType.Kind.NULL || convertible(v.type(), target)) {
-                    return retypeVariable(v, target, effective, pos);
-                }
             }
             case Tam.NullValue ignored -> {
                 return new Tam.NullValue(target);
@@ -591,37 +571,6 @@ public final class Resolver {
         error(pos, Diagnostic.Phase.TYPE,
                 "match arms return different types (" + current + " and " + candidate + ")");
         return current;
-    }
-
-    // ------------------------------------------------------------------
-    // Variables
-    // ------------------------------------------------------------------
-
-    private Tam.Variable variable(Ast.Param p, TaqlType type, PhysicalType sqlType) {
-        TaqlType known = variableTypes.get(p.name());
-        TaqlType resolved = known == null || known.kind() == TaqlType.Kind.NULL ? type : known;
-        variableTypes.put(p.name(), resolved);
-        return new Tam.Variable(p.name(), resolved, sqlType != null ? sqlType : sqlTypeFor(resolved));
-    }
-
-    private Tam.Variable retypeVariable(Tam.Variable v, TaqlType target, PhysicalType sqlType, Ast.Pos pos) {
-        TaqlType known = variableTypes.get(v.name());
-        if (known != null && known.kind() != TaqlType.Kind.NULL && !known.equals(target)
-                && !(known.isNumeric() && target.isNumeric())) {
-            error(pos, Diagnostic.Phase.TYPE,
-                    "$" + v.name() + " is used as " + known + " and as " + target);
-        }
-        variableTypes.put(v.name(), target);
-        return new Tam.Variable(v.name(), target, sqlType);
-    }
-
-    private void checkAllVariablesTyped() {
-        variableTypes.forEach((name, type) -> {
-            if (type.kind() == TaqlType.Kind.NULL) {
-                error(Ast.Pos.NONE, Diagnostic.Phase.TYPE,
-                        "cannot infer the type of $" + name + "; use it in a comparison with a field");
-            }
-        });
     }
 
     /**

@@ -41,11 +41,7 @@ class QueryPolicyTest {
     };
 
     private Restrictions restrictionsOf(String query) {
-        return compiler.compile(query).restrictions(Map.of());
-    }
-
-    private Restrictions restrictionsOf(String query, Map<String, Object> variables) {
-        return compiler.compile(query).restrictions(variables);
+        return compiler.compile(query).bind().restrictions();
     }
 
     private void check(String query) {
@@ -67,14 +63,6 @@ class QueryPolicyTest {
                     restrictionsOf("list { TransactionId } over { ClientId = 'CH-1' }").on("ClientId").orElseThrow());
             assertEquals(Set.of("CH-1", "CH-2"),
                     restrictionsOf("list { TransactionId } over { clientId in ['CH-1','CH-2'] }").on("clientid").orElseThrow());
-        }
-
-        @Test
-        void aListVariableIsPinnedByTheValuesSupplied() {
-            // The plan is the same whoever calls; the clients are not in it.
-            Restrictions mine = restrictionsOf("list { TransactionId } over { clientId in $clients }",
-                    Map.of("clients", List.of("CH-1", "CH-2")));
-            assertEquals(Set.of("CH-1", "CH-2"), mine.on("ClientId").orElseThrow());
         }
 
         @Test
@@ -189,15 +177,5 @@ class QueryPolicyTest {
             refused(theirs);
         }
 
-        @Test
-        void oneListVariableQueryServesCallersWithDifferentClients() {
-            String query = "list { TransactionId } over { clientId in $clients }";
-            var compiled = compiler.compile(query);
-
-            MAY_READ_CH1_AND_CH2.check(TaqlQuery.of(query),
-                    compiled.restrictions(Map.of("clients", List.of("CH-1"))));
-            assertThrows(TaqlException.class, () -> MAY_READ_CH1_AND_CH2.check(TaqlQuery.of(query),
-                    compiled.restrictions(Map.of("clients", List.of("CH-9")))));
-        }
     }
 }

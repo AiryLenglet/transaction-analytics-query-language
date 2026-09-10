@@ -72,7 +72,7 @@ public final class SqlServerGenerator implements QueryTranslator {
     }
 
     @Override
-    public Plan translate(Tam.Query query, Map<String, TaqlType> variables, String shapeKey) {
+    public Plan translate(Tam.Query query, String shapeKey) {
         // Emission state is per statement, so each call builds its own
         // generator: the instance a compiler holds stays stateless and shared.
         SqlServerGenerator emission = new SqlServerGenerator();
@@ -80,7 +80,7 @@ public final class SqlServerGenerator implements QueryTranslator {
         List<Plan.Column> columns = query.outputs().stream()
                 .map(o -> new Plan.Column(o.alias(), o.expr().type()))
                 .toList();
-        return new Plan(emission.sql.toString(), emission.parameters, columns, variables, shapeKey);
+        return new Plan(emission.sql.toString(), emission.parameters, columns, shapeKey);
     }
 
     private void query(Tam.Query q) {
@@ -119,7 +119,6 @@ public final class SqlServerGenerator implements QueryTranslator {
     private static boolean carriesParameter(Tam.Expr e) {
         return switch (e) {
             case Tam.LiteralRef ignored -> true;
-            case Tam.Variable ignored -> true;
             case Tam.Constant ignored -> true;
             case Tam.Column ignored -> false;
             case Tam.OutputRef ignored -> false;
@@ -143,7 +142,6 @@ public final class SqlServerGenerator implements QueryTranslator {
             case Tam.Compare c -> carriesParameter(c.left()) || carriesParameter(c.right());
             case Tam.InList i -> carriesParameter(i.subject()) || i.items().stream().anyMatch(SqlServerGenerator::carriesParameter);
             case Tam.Between b -> carriesParameter(b.subject()) || carriesParameter(b.low()) || carriesParameter(b.high());
-            case Tam.InVariable ignored -> true;
             case Tam.IsNull n -> carriesParameter(n.subject());
             case Tam.Like l -> carriesParameter(l.subject()) || carriesParameter(l.pattern());
         };
@@ -267,7 +265,6 @@ public final class SqlServerGenerator implements QueryTranslator {
                 collectColumns(b.low(), out);
                 collectColumns(b.high(), out);
             }
-            case Tam.InVariable v -> collectColumns(v.subject(), out);
             case Tam.IsNull n -> collectColumns(n.subject(), out);
             case Tam.Like l -> {
                 collectColumns(l.subject(), out);
@@ -502,7 +499,6 @@ public final class SqlServerGenerator implements QueryTranslator {
             case Tam.OutputRef o -> sql.append(quote(o.alias()));
             case Tam.NullValue ignored -> sql.append("NULL");
             case Tam.LiteralRef l -> value(l);
-            case Tam.Variable v -> value(v);
             case Tam.Constant c -> value(c);
             case Tam.Unary u -> {
                 sql.append("(").append(u.op());
@@ -630,7 +626,6 @@ public final class SqlServerGenerator implements QueryTranslator {
                 sql.append(" AND ");
                 expr(b.high());
             }
-            case Tam.InVariable v -> inVariable(v);
             case Tam.IsNull n -> {
                 expr(n.subject());
                 sql.append(n.negated() ? " IS NOT NULL" : " IS NULL");
@@ -641,27 +636,6 @@ public final class SqlServerGenerator implements QueryTranslator {
                 expr(l.pattern());
             }
         }
-    }
-
-    /**
-     * A list variable has unknown arity at plan time, so {@code IN (?, ?, ...)}
-     * is not an option -- the SQL text would depend on the caller's data and
-     * every distinct length would compile a new plan (and a new plan in SQL
-     * Server's own cache too). Binding the list as one JSON parameter and
-     * shredding it with OPENJSON keeps both plans stable, and the WITH clause
-     * gives the values the column's own type so the comparison can still seek.
-     */
-    private void inVariable(Tam.InVariable v) {
-        Tam.Variable var = v.variable();
-        // A variable resolved against a column carries that column's type; one
-        // that never met a column falls back to something wide enough to hold it.
-        SqlType elementType = var.physicalType() instanceof SqlType sql ? sql : new SqlType.VarChar(400);
-        expr(v.subject());
-        sql.append(v.negated() ? " NOT IN (" : " IN (");
-        // The rendered type comes from SqlType, not from a string in the catalog.
-        sql.append("SELECT [value] FROM OPENJSON(?) WITH ([value] ").append(elementType.sql()).append(" '$')");
-        sql.append(")");
-        parameters.add(new Plan.VariableList(var.name(), var.type().element(), elementType));
     }
 
     private void combine(List<Tam.Pred> operands, String separator) {
@@ -683,10 +657,6 @@ public final class SqlServerGenerator implements QueryTranslator {
         switch (e) {
             case Tam.LiteralRef l -> {
                 parameters.add(new Plan.Auto(l.slot(), l.type(), l.physicalType()));
-                sql.append("?");
-            }
-            case Tam.Variable v -> {
-                parameters.add(new Plan.Variable(v.name(), v.type(), v.physicalType()));
                 sql.append("?");
             }
             case Tam.Constant c -> {

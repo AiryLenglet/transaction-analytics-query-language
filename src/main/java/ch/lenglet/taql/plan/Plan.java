@@ -3,8 +3,6 @@ package ch.lenglet.taql.plan;
 import ch.lenglet.taql.PhysicalType;
 import ch.lenglet.taql.TaqlType;
 
-import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -18,31 +16,21 @@ import java.util.Map;
  * of those supplies its own literal table at execution time.
  *
  * @param parameters  in JDBC order -- slot i binds to parameter index i+1.
- * @param variables   the $variables this plan needs, and their inferred types.
- *                    A REST layer can publish this as the endpoint's contract.
  */
 public record Plan(String statement,
                    List<ParamSlot> parameters,
                    List<Column> columns,
-                   Map<String, TaqlType> variables,
                    String shapeKey,
                    Map<String, List<Restriction>> restrictions) {
 
     /** Without restrictions; a translator builds this form and the compiler adds them. */
-    public Plan(String statement, List<ParamSlot> parameters, List<Column> columns,
-                Map<String, TaqlType> variables, String shapeKey) {
-        this(statement, parameters, columns, variables, shapeKey, Map.of());
+    public Plan(String statement, List<ParamSlot> parameters, List<Column> columns, String shapeKey) {
+        this(statement, parameters, columns, shapeKey, Map.of());
     }
 
     public Plan {
         parameters = List.copyOf(parameters);
         columns = List.copyOf(columns);
-        // Not Map.copyOf: its iteration order is randomised per JVM, and this
-        // map is published as the endpoint's contract. A generated schema that
-        // reorders its own properties on every restart breaks caching, diffs
-        // and snapshot tests for no reason. The resolver hands it over in order
-        // of first use, which is a sensible order for a human to read; keep it.
-        variables = Collections.unmodifiableMap(new LinkedHashMap<>(variables));
         restrictions = Map.copyOf(restrictions);
     }
 
@@ -52,7 +40,7 @@ public record Plan(String statement,
      * its values -- so it is cached with the plan and resolved per call.
      */
     public Plan restrictedBy(Map<String, List<Restriction>> found) {
-        return new Plan(statement, parameters, columns, variables, shapeKey, found);
+        return new Plan(statement, parameters, columns, shapeKey, found);
     }
 
     /**
@@ -74,8 +62,6 @@ public record Plan(String statement,
         /** literals[slot] of the query text being run. */
         record Lit(int slot) implements ValueRef {}
 
-        /** A caller-supplied variable; a list variable contributes all its elements. */
-        record Var(String name) implements ValueRef {}
     }
 
     /**
@@ -98,17 +84,7 @@ public record Plan(String statement,
     /** Auto-parameterised user literal: value = literals[index] of the query being run. */
     public record Auto(int index, TaqlType type, PhysicalType physicalType) implements ParamSlot {}
 
-    /** A named $variable supplied by the caller. */
-    public record Variable(String name, TaqlType type, PhysicalType physicalType) implements ParamSlot {}
-
     /** A compiler-supplied constant, e.g. the default row cap. Shape-invariant, so it lives in the plan. */
     public record Constant(Object value, TaqlType type, PhysicalType physicalType) implements ParamSlot {}
 
-    /** A whole list bound as a single JSON parameter -- see SqlServerGenerator. */
-    public record VariableList(String name, TaqlType elementType, PhysicalType physicalType) implements ParamSlot {
-        @Override
-        public TaqlType type() {
-            return TaqlType.listOf(elementType);
-        }
-    }
 }

@@ -14,10 +14,9 @@ import java.util.Set;
  * carries a {@link PhysicalType} without this model knowing whose it is, so the
  * only stage that names a dialect is the generator. Names have become
  * {@link Column}s carrying a table alias, implicit conversions have been made
- * explicit, and every value is either a {@link LiteralRef} (index into the
- * per-query literal table) or a {@link Variable} (a named $param). There are no
- * strings in this tree that came from the user, which is what makes the SQL
- * generator a pure, boring rendering pass.
+ * explicit, and every value is a {@link LiteralRef} -- an index into the
+ * per-query literal table. There are no strings in this tree that came from the
+ * user, which is what makes the SQL generator a pure, boring rendering pass.
  */
 public final class Tam {
 
@@ -37,9 +36,6 @@ public final class Tam {
 
     /** Auto-parameterised constant: the value is literals[slot] of the *calling* query. */
     public record LiteralRef(int slot, TaqlType type, PhysicalType physicalType) implements Expr {}
-
-    /** A named query variable supplied at execution time. */
-    public record Variable(String name, TaqlType type, PhysicalType physicalType) implements Expr {}
 
     public record NullValue(TaqlType type) implements Expr {}
 
@@ -93,9 +89,6 @@ public final class Tam {
     public record InList(Expr subject, List<Expr> items, boolean negated) implements Pred {}
 
     public record Between(Expr subject, Expr low, Expr high, boolean negated) implements Pred {}
-
-    /** {@code x in $list}: arity is unknown at plan time, so this lowers to a set-returning join. */
-    public record InVariable(Expr subject, Variable variable, boolean negated) implements Pred {}
 
     public record IsNull(Expr subject, boolean negated) implements Pred {}
 

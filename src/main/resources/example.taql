@@ -36,20 +36,18 @@ over {
 }
 top 10 by incomingAmount
 -----------------
-// Explicit variables. The plan advertises what it needs ($clients: list<string>,
-// $from/$to: date) and the caller supplies them per request, so this query text
-// is byte-identical on every call and hits the L1 cache.
+// Several measures over a computed group key, one of them a distinct count.
 analysis by country, year = year(TransactionDate) {
     total = sum(TransactionValue)
     largest = max(TransactionValue)
     distinctCounterparties = count(distinct counterpartyId)
 }
 over {
-    clientId in $clients
-    TransactionDate in $from..$to
+    clientId in ['1', '3']
+    TransactionDate in '2010-01-01'..'2019-12-31'
     TransactionValue > 500
 }
-top $limit by total
+top 10 by total
 -----------------
 // Flat query: same filter and expression language, no grouping.
 list {

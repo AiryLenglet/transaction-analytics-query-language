@@ -31,16 +31,13 @@ class CidTest {
     private final TaqlCompiler compiler = new TaqlCompiler(DemoCatalog.create());
 
     @Test
-    void aQueryDoesNotRenderItsValuesOrItsSource() {
-        // A record's generated toString would print both, so one
+    void aQueryDoesNotRenderItsSource() {
+        // A record's generated toString would print it, so one
         // log.debug("{}", query) would be a disclosure.
-        TaqlQuery query = TaqlQuery.of("list { TransactionId } over { ClientId = '" + CID + "' }",
-                Map.of("other", CID));
+        TaqlQuery query = TaqlQuery.of("list { TransactionId } over { ClientId = '" + CID + "' }");
 
+        // A query states its constants inline, so its source is client data too.
         assertFalse(query.toString().contains(CID), query.toString());
-        // Variable names are safe: the query author wrote them, and they are
-        // part of the published contract.
-        assertTrue(query.toString().contains("other"), query.toString());
     }
 
     @Test
@@ -48,7 +45,7 @@ class CidTest {
         var compiled = compiler.compile("list { TransactionId } over { ClientId = '" + CID + "' }");
         assertFalse(compiled.toString().contains(CID), compiled.toString());
         // The value is still bindable -- hidden from rendering, not from use.
-        assertTrue(compiled.bind().contains(CID));
+        assertTrue(compiled.bind().values().contains(CID));
     }
 
     @Test

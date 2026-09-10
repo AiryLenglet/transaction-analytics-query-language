@@ -20,8 +20,8 @@ import java.util.Map;
  *       {@code A and (ClientId = 'x' and B)} counts. Anything under an
  *       {@code or} does not: in {@code ClientId = 'x' or Country = 'CH'} the
  *       second branch matches every client, so the filter pins nothing.</li>
- *   <li><b>Positive equality and membership only.</b> {@code =}, {@code in [...]}
- *       and {@code in $var}. Not {@code !=}, {@code like}, ranges, {@code is null}
+ *   <li><b>Positive equality and membership only.</b> {@code =} and
+ *       {@code in [...]}. Not {@code !=}, {@code like}, ranges, {@code is null}
  *       or anything negated -- none of those has a set to enumerate.</li>
  * </ul>
  *
@@ -59,10 +59,6 @@ public final class FilterRestrictions {
                 if (i.subject() instanceof Tam.Column column) record(column, i.items(), into);
             }
 
-            case Tam.InVariable v when !v.negated() -> {
-                if (v.subject() instanceof Tam.Column column) record(column, List.of(v.variable()), into);
-            }
-
             // Everything else pins nothing this can enumerate: or, not, !=, <, >,
             // like, between, is null, and the negated forms of the above.
             default -> { }
@@ -75,7 +71,6 @@ public final class FilterRestrictions {
         for (Tam.Expr value : values) {
             switch (value) {
                 case Tam.LiteralRef l -> refs.add(new Plan.ValueRef.Lit(l.slot()));
-                case Tam.Variable v -> refs.add(new Plan.ValueRef.Var(v.name()));
                 // A computed value -- ClientId = upper(Country) -- is not a set
                 // of constants, so the whole conjunct stops being enumerable.
                 default -> {

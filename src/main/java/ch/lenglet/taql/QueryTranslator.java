@@ -3,8 +3,6 @@ package ch.lenglet.taql;
 import ch.lenglet.taql.plan.Plan;
 import ch.lenglet.taql.sem.Tam;
 
-import java.util.Map;
-
 /**
  * Turns a resolved query into a statement in some target query language.
  *
@@ -57,5 +55,5 @@ public interface QueryTranslator {
      * whatever state one translation needs belongs to the call, not the
      * instance.
      */
-    Plan translate(Tam.Query query, Map<String, TaqlType> variables, String shapeKey);
+    Plan translate(Tam.Query query, String shapeKey);
 }

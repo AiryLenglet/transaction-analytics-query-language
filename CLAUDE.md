@@ -33,6 +33,8 @@ Database is optional. `./runMsSqlServer.sh` starts SQL Server 2019 in Docker (sa
 
 `Restrictions.on(field)` returning **empty means "cannot tell", which a policy must read as refuse** — not as "nothing to check". `FilterRestrictions` only recognises positive `=`, `in [...]` and `in $var` in a *top-level conjunct*; anything under an `or`, negated, or compared with `like`/a range pins nothing. `ClientId = 'x' or Country = 'CH'` reads the whole table, and the walk must never make it look otherwise. `QueryPolicyTest$Pinned` is where that is nailed down.
 
+**TAQL has no placeholders.** A query states its own constants; there is no way to supply a value alongside it, and `TaqlQuery` holds nothing but source. That is a language decision — one way to express a value, so reading a query tells you the whole question — and it costs the plan cache nothing, because `AstBuilder` lifts literals out during parsing and a thousand queries differing only in their constants still share one plan. What it does cost: L1 (keyed on exact text) now only helps a query repeated verbatim, which measured at a 0.03% hit rate against inline constants. L2 does the real work.
+
 **Collaborators are objects, not statics.** `TaqlCompiler` takes a `QueryTranslator`, a `TaqlParser` (which carries the parse limits), a `Resolver.Options` and two `PlanCache`s; `TaqlTemplate` takes a compiler and a `PlanRunner`. Nothing on the path from text to rows is reached through a static, which is what makes limits, caches, dialect and store all a deployment's call rather than the library's.
 
 **Logging.** `Main` holds only a `TaqlTemplate`, so the generated SQL, plan ids and cache behaviour come from the library's own debug logs rather than from the driver — which is what an operator sees in production. `slf4j-api` is a normal dependency; `slf4j-simple` is `runtime` scope for the demo only and an embedder should exclude it. `src/main/resources/simplelogger.properties` sets debug on `ch.lenglet`; the copy in `src/test/resources` wins on the test classpath and keeps the suite quiet.
@@ -74,7 +76,7 @@ Two things a second backend needs that are deliberately **not** designed yet, be
 
 The shape key is `AstPrinter.canonical(stmt)` — a value-independent rendering of the literal-free AST, computed **before** name resolution.
 
-**Consequence for any change you make:** if a syntactic feature changes the generated SQL, `AstPrinter` must render it, or two queries needing different SQL will collide on one cached plan. Inline list *arity* is in the key for exactly this reason (`IN (?, ?)` vs `IN (?, ?, ?)`); a `$variable` list is not, because it lowers to a single `OPENJSON` parameter of unknown arity. `TaqlCompilerTest$Cache` and `theWindowSpecIsPartOfTheShapeKey` guard this — add a case there when you add syntax.
+**Consequence for any change you make:** if a syntactic feature changes the generated SQL, `AstPrinter` must render it, or two queries needing different SQL will collide on one cached plan. Inline list *arity* is in the key for exactly this reason (`IN (?, ?)` vs `IN (?, ?, ?)`). `TaqlCompilerTest$Cache` and `theWindowSpecIsPartOfTheShapeKey` guard this — add a case there when you add syntax.
 
 **Second consequence, and the one that bites hardest:** `Plan.Auto` slots index the literal table of the query *currently running*, so two texts sharing a key must number their literals identically. Before this was fixed, `list {...} top 5 over { v > 500 }` silently executed as `TOP 500 ... > 5`.
 

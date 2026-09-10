@@ -139,10 +139,14 @@ change every call.
 The shape key is the canonical rendering of the literal-free AST, so a thousand
 queries differing only in their constants share one L2 entry. Each `Plan` holds
 SQL plus a *recipe* for its parameters — `Auto(i)` reads `literals[i]` of the
-query being run, `Variable(name)` reads a caller value, `Constant` is
-compiler-supplied — which is what lets one immutable plan serve them all.
-Clients that use `$variables` instead of inlined constants send identical text
-every time and hit L1.
+query being run, `Constant` is compiler-supplied — which is what lets one
+immutable plan serve them all. L1 only helps a query repeated verbatim; L2 is
+where the work is saved.
+
+**There are no placeholders.** A query states its own constants and nothing can
+be supplied alongside it, so one way to express a value and reading the text
+tells you the whole question. That costs the cache nothing — literals are lifted
+out during parsing either way.
 
 **Bind types match column types.** The resolver types a literal from the column
 it is compared against, so `'2010-01-01'` binds as a `date` and `'C'` as
@@ -158,13 +162,10 @@ longer depends on a connection-wide `sendStringParametersAsUnicode` switch (the
 demo still sets it, as a backstop); and constructors reject types the server
 would reject — `VarChar(9000)`, `Decimal(10,11)`, `DateTime2(8)`.
 
-**List variables bind as one parameter.** `clientId in $clients` has unknown
-arity at plan time, so it lowers to
-`IN (SELECT [value] FROM OPENJSON(?) WITH ([value] varchar(50) '$'))` — one
-parameter whatever the list length, which keeps both this plan cache and SQL
-Server's own stable. Inline lists keep `IN (?, ?)` since their arity is part of
-the shape. (`OPENJSON` needs database compatibility level 130+, i.e. SQL Server
-2016 or later; the 2019 image in `runMsSqlServer.sh` defaults to 150.)
+**Lists keep `IN (?, ?)`.** A list is written inline, so its arity is known at
+plan time and is part of the shape key — `in ['1','3']` and `in ['1','3','7']`
+are different shapes and compile different plans, which is correct, because they
+are different SQL.
 
 **Window functions stack levels rather than fight T-SQL.** A window function
 cannot see the aggregate it reads in the same `SELECT`, and `ROW_NUMBER` cannot
@@ -282,7 +283,7 @@ exist once the values are bound.
 
 `restrictions.on(field)` returns the values the filter pins that field to, or
 **empty when it cannot tell** — which a policy must treat as *refuse*. Only
-positive `=`, `in [...]` and `in $var` in a top-level conjunct count. A field
+positive `=` and `in [...]` in a top-level conjunct count. A field
 compared with `like` or a range has no set to enumerate, and one mentioned only
 under an `or` restricts nothing at all: `ClientId = '1' or Country = 'CH'`
 returns every client's rows.

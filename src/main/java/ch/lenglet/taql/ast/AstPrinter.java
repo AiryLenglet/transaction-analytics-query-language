@@ -9,8 +9,7 @@ import java.util.StringJoiner;
  * Because {@link AstBuilder} has already replaced literal values with slot
  * holes, this rendering is value-independent: whitespace, comments, clause
  * order and the actual constants all wash out, while anything that changes the
- * generated SQL -- field names, operators, list arity, variable names -- is
- * preserved.
+ * generated SQL -- field names, operators, list arity -- is preserved.
  *
  * <h2>Why the slot index is in the key</h2>
  * A cached plan's {@link ch.lenglet.taql.plan.Plan.Auto} slots index into the
@@ -87,7 +86,6 @@ final class AstPrinter {
             // The *kind* matters (it drives literal typing) and so does the slot
             // (it is what Plan.Auto indexes with); the value never does.
             case Ast.Lit l -> "#" + l.slot() + l.kind().name().charAt(0);
-            case Ast.Param p -> "$" + p.name();
             case Ast.Unary u -> "(" + u.op() + expr(u.operand()) + ")";
             case Ast.Binary b -> "(" + expr(b.left()) + b.op() + expr(b.right()) + ")";
             case Ast.Call c -> c.name() + "(" + join(c.args()) + ")";
@@ -117,7 +115,6 @@ final class AstPrinter {
             // List arity is part of the shape: it changes the number of '?' emitted.
             case Ast.InList i -> expr(i.subject()) + (i.negated() ? " not in[" : " in[") + join(i.items()) + "]";
             case Ast.InRange r -> expr(r.subject()) + (r.negated() ? " not in " : " in ") + expr(r.low()) + ".." + expr(r.high());
-            case Ast.InVariable v -> expr(v.subject()) + (v.negated() ? " not in $" : " in $") + v.variable().name();
             case Ast.IsNull n -> expr(n.subject()) + (n.negated() ? " is not null" : " is null");
             case Ast.Like l -> expr(l.subject()) + (l.negated() ? " not like " : " like ") + expr(l.pattern());
         };

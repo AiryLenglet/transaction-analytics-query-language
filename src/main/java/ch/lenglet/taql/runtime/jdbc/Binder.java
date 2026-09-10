@@ -15,10 +15,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-import java.util.StringJoiner;
 
 /**
  * Turns a plan's parameter recipe plus a set of values into JDBC bindings.
@@ -50,10 +48,9 @@ public final class Binder {
     /**
      * Resolves every slot to a Java value, in JDBC order.
      *
-     * @param literals  the literal table of the query text being executed
-     * @param variables caller-supplied $variables
+     * @param literals the literal table of the query text being executed
      */
-    public static List<Object> resolve(Plan plan, List<Object> literals, Map<String, Object> variables) {
+    public static List<Object> resolve(Plan plan, List<Object> literals) {
         List<Object> out = new ArrayList<>(plan.parameters().size());
         for (Plan.ParamSlot slot : plan.parameters()) {
             out.add(switch (slot) {
@@ -61,8 +58,6 @@ public final class Binder {
                 // anyway because the resolver may have retyped it to the column.
                 case Plan.Auto a -> convert(literals.get(a.index()), a.type(), "this query's value");
                 case Plan.Constant c -> c.value();
-                case Plan.Variable v -> convert(require(variables, v.name()), v.type(), "$" + v.name());
-                case Plan.VariableList v -> toJsonArray(require(variables, v.name()), v.elementType(), v.name());
             });
         }
         return out;
@@ -134,8 +129,9 @@ public final class Binder {
             case DATE -> date(raw, what);
             case TIMESTAMP -> timestamp(raw, what);
             case BOOLEAN -> bool(raw, what);
-            // Shredded element by element in toJsonArray, which types each one.
-            case LIST -> raw;
+            // No construct produces one: a list only ever appears as an inline
+            // 'in [...]', whose elements are typed and bound one by one.
+            case LIST -> throw new IllegalStateException("no slot binds as " + type);
             // Resolution rejects a variable it could not type, and a NULL
             // literal lowers to Tam.NullValue rather than a bindable slot.
             case NULL -> throw new IllegalStateException("no slot should ever bind as " + type);
@@ -234,43 +230,4 @@ public final class Binder {
         return type;
     }
 
-    /** A list variable travels as one JSON array parameter; see SqlServerGenerator.inVariable. */
-    private static String toJsonArray(Object raw, TaqlType elementType, String name) {
-        if (!(raw instanceof Collection<?> items)) {
-            throw new TaqlException(new Diagnostic(Diagnostic.Phase.TYPE, 0, 0,
-                    "$" + name + " must be a list, got " + describe(raw)));
-        }
-        if (items.isEmpty()) {
-            throw new TaqlException(new Diagnostic(Diagnostic.Phase.TYPE, 0, 0,
-                    "$" + name + " must not be empty"));
-        }
-        StringJoiner json = new StringJoiner(",", "[", "]");
-        int index = 0;
-        for (Object item : items) {
-            json.add(jsonScalar(convert(item, elementType, "$" + name + "[" + index++ + "]")));
-        }
-        return json.toString();
-    }
-
-    private static String jsonScalar(Object value) {
-        if (value == null) return "null";
-        if (value instanceof Number || value instanceof Boolean) return value.toString();
-        String s = value.toString();
-        StringBuilder sb = new StringBuilder("\"");
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '"' -> sb.append("\\\"");
-                case '\\' -> sb.append("\\\\");
-                case '\n' -> sb.append("\\n");
-                case '\r' -> sb.append("\\r");
-                case '\t' -> sb.append("\\t");
-                default -> {
-                    if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
-                    else sb.append(c);
-                }
-            }
-        }
-        return sb.append('"').toString();
-    }
 }
