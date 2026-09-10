@@ -1,6 +1,6 @@
 package ch.lenglet.taql.plan;
 
-import ch.lenglet.taql.sem.Tam;
+import ch.lenglet.taql.sem.Resolved;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -38,25 +38,25 @@ public final class FilterRestrictions {
 
     private FilterRestrictions() {}
 
-    public static Map<String, List<Plan.Restriction>> of(Tam.Query query) {
+    public static Map<String, List<Plan.Restriction>> of(Resolved.Query query) {
         Map<String, List<Plan.Restriction>> found = new LinkedHashMap<>();
         if (query.filter() != null) collect(query.filter(), found);
         return found;
     }
 
     /** Walks the conjunction, and only the conjunction. */
-    private static void collect(Tam.Pred pred, Map<String, List<Plan.Restriction>> into) {
+    private static void collect(Resolved.Pred pred, Map<String, List<Plan.Restriction>> into) {
         switch (pred) {
-            case Tam.And a -> a.operands().forEach(operand -> collect(operand, into));
+            case Resolved.And a -> a.operands().forEach(operand -> collect(operand, into));
 
-            case Tam.Compare c when c.op().equals("=") -> {
+            case Resolved.Compare c when c.op().equals("=") -> {
                 // Either side may be the column: 'x' = ClientId is the same claim.
-                if (c.left() instanceof Tam.Column column) record(column, List.of(c.right()), into);
-                else if (c.right() instanceof Tam.Column column) record(column, List.of(c.left()), into);
+                if (c.left() instanceof Resolved.Column column) record(column, List.of(c.right()), into);
+                else if (c.right() instanceof Resolved.Column column) record(column, List.of(c.left()), into);
             }
 
-            case Tam.InList i when !i.negated() -> {
-                if (i.subject() instanceof Tam.Column column) record(column, i.items(), into);
+            case Resolved.InList i when !i.negated() -> {
+                if (i.subject() instanceof Resolved.Column column) record(column, i.items(), into);
             }
 
             // Everything else pins nothing this can enumerate: or, not, !=, <, >,
@@ -65,12 +65,12 @@ public final class FilterRestrictions {
         }
     }
 
-    private static void record(Tam.Column column, List<Tam.Expr> values,
+    private static void record(Resolved.Column column, List<Resolved.Expr> values,
                                Map<String, List<Plan.Restriction>> into) {
         List<Plan.ValueRef> refs = new ArrayList<>(values.size());
-        for (Tam.Expr value : values) {
+        for (Resolved.Expr value : values) {
             switch (value) {
-                case Tam.LiteralRef l -> refs.add(new Plan.ValueRef.Lit(l.slot()));
+                case Resolved.LiteralRef l -> refs.add(new Plan.ValueRef.Lit(l.slot()));
                 // A computed value -- ClientId = upper(Country) -- is not a set
                 // of constants, so the whole conjunct stops being enumerable.
                 default -> {

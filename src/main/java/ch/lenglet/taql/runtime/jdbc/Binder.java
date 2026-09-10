@@ -133,7 +133,7 @@ public final class Binder {
             // 'in [...]', whose elements are typed and bound one by one.
             case LIST -> throw new IllegalStateException("no slot binds as " + type);
             // Resolution rejects a variable it could not type, and a NULL
-            // literal lowers to Tam.NullValue rather than a bindable slot.
+            // literal lowers to Resolved.NullValue rather than a bindable slot.
             case NULL -> throw new IllegalStateException("no slot should ever bind as " + type);
         };
     }

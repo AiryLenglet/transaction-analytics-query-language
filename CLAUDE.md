@@ -46,7 +46,7 @@ What is safe to log is a deliberate line: the shape key and the generated SQL ar
 ```
 text → TaqlParser (ANTLR)        → parse tree
      → AstBuilder                 → Ast          untyped syntax model, LITERALS LIFTED OUT
-     → Resolver (+ Catalog)       → Tam          typed, resolved, store-agnostic
+     → Resolver (+ Catalog)       → Resolved     names bound, types settled, store-agnostic
      → QueryTranslator.translate  → Plan         statement text + parameter recipe
      → PlanRunner.run             → List<Map<String,Object>>
 ```
@@ -55,7 +55,7 @@ text → TaqlParser (ANTLR)        → parse tree
 
 The packages say which is which. `ch.lenglet.taql.runtime` is store-neutral; `runtime.jdbc` holds `JdbcPlanRunner`, `Binder` and `SqlFailure`; `ch.lenglet.taql.sql` holds `SqlServerGenerator` and `SqlType`. `grep -rl 'java.sql\|javax.sql\|SqlType' src/main/java` should return only those two packages, `DemoCatalog` and `Main`.
 
-Everything above `QueryTranslator` is language-agnostic and must stay that way: `Tam` and `Plan` carry a `PhysicalType`, never a `SqlType`. `QueryTranslator` is the single seam where a query becomes T-SQL — it supplies both the statement and the default physical type for a value no column has typed, which is why the resolver takes one. It is named for what it does: it translates, and never touches a store; that is `PlanRunner`. `SqlServerGenerator` is the only implementation; `grep -l SqlType src/main/java` shows exactly which files are dialect-specific, and that list should not grow.
+Everything above `QueryTranslator` is language-agnostic and must stay that way: `Resolved` and `Plan` carry a `PhysicalType`, never a `SqlType`. `QueryTranslator` is the single seam where a query becomes T-SQL — it supplies both the statement and the default physical type for a value no column has typed, which is why the resolver takes one. It is named for what it does: it translates, and never touches a store; that is `PlanRunner`. `SqlServerGenerator` is the only implementation; `grep -l SqlType src/main/java` shows exactly which files are dialect-specific, and that list should not grow.
 
 Two things a second backend needs that are deliberately **not** designed yet, because they cannot be designed well from one implementation: an execution seam (`runtime` is JDBC to its bones — connection, error taxonomy, driver), and a capability model so a backend that cannot express a construct — window functions have no analogue outside SQL — yields a positioned diagnostic instead of the generator throwing `IllegalStateException`. `Catalog` is the third: its types are neutral now, but `Table`/`Join`/`Field.column` describe rows matched on key columns, which is not how a graph is addressed.
 
@@ -65,7 +65,7 @@ Two things a second backend needs that are deliberately **not** designed yet, be
 
 `AstBuilder` lifts **every literal** out of the tree into `Ast.Query.literals()` and leaves an `Ast.Lit(slot)` hole behind. By the time the generator runs, user-typed characters are not reachable from the tree it walks — injection resistance is structural, not a discipline. Identifiers get the same treatment from the other side: a name that does not resolve to a `Catalog.Field` is a compile error, so no user text is ever emitted as an identifier either.
 
-**Do not break this.** Any new node that could carry a user value must carry a slot index (`Tam.LiteralRef`) or a variable name (`Tam.Variable`), never the value.
+**Do not break this.** Any new node that could carry a user value must carry a slot index (`Resolved.LiteralRef`) or a variable name (`Resolved.Variable`), never the value.
 
 ## The two caches, and the shape key
 
@@ -95,7 +95,7 @@ Adding language surface usually means touching this whole chain, in order:
 3. `AstPrinter` — render the new construct into the canonical key
 4. `Functions` — registry for scalars / aggregates / window functions; anything not listed is a compile error
 5. `Resolver` — resolution, typing, diagnostics (`Diagnostic.Phase` SYNTAX/RESOLUTION/TYPE with line:column)
-6. `Tam` — typed node
+6. `Resolved` — typed node
 7. `SqlServerGenerator` — rendering
 
 The resolver **collects** diagnostics rather than failing on the first, then throws one `TaqlException` carrying all of them; `error()` accumulates, `fail()` throws immediately. Prefer `error()`.
@@ -112,7 +112,7 @@ The resolver **collects** diagnostics rather than failing on the first, then thr
 - Single sequential pass: text is appended in final statement order, and every `?` emitted appends its matching `Plan.ParamSlot`. That keeps slot order and JDBC index in lockstep **including** when an expression is rendered twice. Never reorder emission without reordering slots.
 - Table aliases are allocated by the generator, not stored in the catalog — a pure function of the entity, so they neither drift with which joins a query needs nor perturb the shape key.
 - **Level stacking.** A computed group key carrying parameters goes through a derived table (T-SQL matches SELECT/GROUP BY occurrences syntactically, and parameterised copies no longer match). Window functions add a level above the GROUP BY; `top N by m within k` adds another for the `ROW_NUMBER` predicate. All three can stack — there is a test for that combination.
-- Window functions read the query's **own outputs** (`Tam.OutputRef`), never base columns, and never another window function.
+- Window functions read the query's **own outputs** (`Resolved.OutputRef`), never base columns, and never another window function.
 
 ## Catalog
 

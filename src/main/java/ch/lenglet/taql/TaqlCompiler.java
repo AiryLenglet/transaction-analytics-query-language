@@ -10,7 +10,7 @@ import ch.lenglet.taql.plan.Plan;
 import ch.lenglet.taql.plan.Restrictions;
 import ch.lenglet.taql.runtime.jdbc.Binder;
 import ch.lenglet.taql.sem.Resolver;
-import ch.lenglet.taql.sem.Tam;
+import ch.lenglet.taql.sem.Resolved;
 import ch.lenglet.taql.sql.SqlServerGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -186,7 +186,7 @@ public final class TaqlCompiler {
                 .restrictedBy(FilterRestrictions.of(resolved.query()));
     }
 
-    public Tam.Query analyse(String source) {
+    public Resolved.Query analyse(String source) {
         return Resolver.resolve(catalog, parser.parse(source), options, translator).query();
     }
 

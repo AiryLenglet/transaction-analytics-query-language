@@ -8,7 +8,13 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * The typed analytics model.
+ * A query after {@link Resolver} has been over it: names bound, types settled.
+ *
+ * The counterpart to {@link ch.lenglet.taql.ast.Ast}, and the reason both exist.
+ * An {@code Ast.Query} is what the text said; a {@code Resolved.Query} is what it
+ * means -- which field each name refers to, what type each value has, which
+ * joins are needed to reach any of it. Everything downstream works on this, and
+ * nothing downstream has to ask the catalog a question.
  *
  * Everything here is resolved and physical, but not dialect-specific: a value
  * carries a {@link PhysicalType} without this model knowing whose it is, so the
@@ -18,9 +24,9 @@ import java.util.Set;
  * per-query literal table. There are no strings in this tree that came from the
  * user, which is what makes the SQL generator a pure, boring rendering pass.
  */
-public final class Tam {
+public final class Resolved {
 
-    private Tam() {}
+    private Resolved() {}
 
     public enum Kind { ANALYSIS, FLAT }
 

@@ -8,7 +8,7 @@ DSL text
   -> parse tree
   -> untyped syntax model      (ast/Ast, ast/AstBuilder)   << literals lifted out here
   -> name resolution + types   (sem/Resolver, catalog/)
-  -> typed analytics model     (sem/Tam)
+  -> typed analytics model     (sem/Resolved)
   -> T-SQL + parameter recipe  (QueryTranslator, sql/SqlServerGenerator, plan/Plan)
 ```
 

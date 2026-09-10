@@ -12,7 +12,7 @@ package ch.lenglet.taql;
  * a parameter must be sent as the thing the column actually is -- that is the
  * difference between seeking an index and converting every row. But they have
  * no business knowing whose vocabulary it is: naming {@code SqlType} in
- * {@code Tam} put T-SQL in the middle of a pipeline whose whole point is that
+ * {@code Resolved} put T-SQL in the middle of a pipeline whose whole point is that
  * only its last stage is dialect-specific.
  *
  * Deliberately almost empty. Everything between the resolver and the generator

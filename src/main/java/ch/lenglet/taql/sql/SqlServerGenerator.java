@@ -5,7 +5,7 @@ import ch.lenglet.taql.PhysicalType;
 import ch.lenglet.taql.TaqlType;
 import ch.lenglet.taql.catalog.Catalog;
 import ch.lenglet.taql.plan.Plan;
-import ch.lenglet.taql.sem.Tam;
+import ch.lenglet.taql.sem.Resolved;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -72,7 +72,7 @@ public final class SqlServerGenerator implements QueryTranslator {
     }
 
     @Override
-    public Plan translate(Tam.Query query, String shapeKey) {
+    public Plan translate(Resolved.Query query, String shapeKey) {
         // Emission state is per statement, so each call builds its own
         // generator: the instance a compiler holds stays stateless and shared.
         SqlServerGenerator emission = new SqlServerGenerator();
@@ -83,13 +83,13 @@ public final class SqlServerGenerator implements QueryTranslator {
         return new Plan(emission.sql.toString(), emission.parameters, columns, shapeKey);
     }
 
-    private void query(Tam.Query q) {
+    private void query(Resolved.Query q) {
         tableAliases = allocateAliases(q.entity());
-        if (q.kind() == Tam.Kind.ANALYSIS && q.hasWindowLevel()) {
+        if (q.kind() == Resolved.Kind.ANALYSIS && q.hasWindowLevel()) {
             analysisWithWindows(q);
             return;
         }
-        if (q.kind() == Tam.Kind.ANALYSIS && needsDerivedTable(q)) {
+        if (q.kind() == Resolved.Kind.ANALYSIS && needsDerivedTable(q)) {
             analysisOverDerivedTable(q);
             return;
         }
@@ -112,50 +112,50 @@ public final class SqlServerGenerator implements QueryTranslator {
      * Only keys that actually carry parameters need this; grouping by a plain
      * column, or by something like YEAR(date), repeats harmlessly.
      */
-    private static boolean needsDerivedTable(Tam.Query q) {
+    private static boolean needsDerivedTable(Resolved.Query q) {
         return q.groups().stream().anyMatch(g -> carriesParameter(g.expr()));
     }
 
-    private static boolean carriesParameter(Tam.Expr e) {
+    private static boolean carriesParameter(Resolved.Expr e) {
         return switch (e) {
-            case Tam.LiteralRef ignored -> true;
-            case Tam.Constant ignored -> true;
-            case Tam.Column ignored -> false;
-            case Tam.OutputRef ignored -> false;
-            case Tam.NullValue ignored -> false;
-            case Tam.Unary u -> carriesParameter(u.operand());
-            case Tam.Binary b -> carriesParameter(b.left()) || carriesParameter(b.right());
-            case Tam.Func f -> f.args().stream().anyMatch(SqlServerGenerator::carriesParameter);
-            case Tam.Case c -> c.whens().stream().anyMatch(w -> carriesParameter(w.result()) || carriesParameter(w.condition()))
+            case Resolved.LiteralRef ignored -> true;
+            case Resolved.Constant ignored -> true;
+            case Resolved.Column ignored -> false;
+            case Resolved.OutputRef ignored -> false;
+            case Resolved.NullValue ignored -> false;
+            case Resolved.Unary u -> carriesParameter(u.operand());
+            case Resolved.Binary b -> carriesParameter(b.left()) || carriesParameter(b.right());
+            case Resolved.Func f -> f.args().stream().anyMatch(SqlServerGenerator::carriesParameter);
+            case Resolved.Case c -> c.whens().stream().anyMatch(w -> carriesParameter(w.result()) || carriesParameter(w.condition()))
                     || (c.otherwise() != null && carriesParameter(c.otherwise()));
-            case Tam.Aggregate a -> (a.argument() != null && carriesParameter(a.argument()))
+            case Resolved.Aggregate a -> (a.argument() != null && carriesParameter(a.argument()))
                     || (a.filter() != null && carriesParameter(a.filter()));
-            case Tam.Window ignored -> false;
+            case Resolved.Window ignored -> false;
         };
     }
 
-    private static boolean carriesParameter(Tam.Pred p) {
+    private static boolean carriesParameter(Resolved.Pred p) {
         return switch (p) {
-            case Tam.And a -> a.operands().stream().anyMatch(SqlServerGenerator::carriesParameter);
-            case Tam.Or o -> o.operands().stream().anyMatch(SqlServerGenerator::carriesParameter);
-            case Tam.Not n -> carriesParameter(n.operand());
-            case Tam.Compare c -> carriesParameter(c.left()) || carriesParameter(c.right());
-            case Tam.InList i -> carriesParameter(i.subject()) || i.items().stream().anyMatch(SqlServerGenerator::carriesParameter);
-            case Tam.Between b -> carriesParameter(b.subject()) || carriesParameter(b.low()) || carriesParameter(b.high());
-            case Tam.IsNull n -> carriesParameter(n.subject());
-            case Tam.Like l -> carriesParameter(l.subject()) || carriesParameter(l.pattern());
+            case Resolved.And a -> a.operands().stream().anyMatch(SqlServerGenerator::carriesParameter);
+            case Resolved.Or o -> o.operands().stream().anyMatch(SqlServerGenerator::carriesParameter);
+            case Resolved.Not n -> carriesParameter(n.operand());
+            case Resolved.Compare c -> carriesParameter(c.left()) || carriesParameter(c.right());
+            case Resolved.InList i -> carriesParameter(i.subject()) || i.items().stream().anyMatch(SqlServerGenerator::carriesParameter);
+            case Resolved.Between b -> carriesParameter(b.subject()) || carriesParameter(b.low()) || carriesParameter(b.high());
+            case Resolved.IsNull n -> carriesParameter(n.subject());
+            case Resolved.Like l -> carriesParameter(l.subject()) || carriesParameter(l.pattern());
         };
     }
 
-    private void analysisOverDerivedTable(Tam.Query q) {
+    private void analysisOverDerivedTable(Resolved.Query q) {
         // Columns the measures read have to be carried through the derived table.
         Map<Catalog.Field, String> names = derivedColumnNames(q);
 
         selectKeyword(q);
 
-        List<Tam.Output> outputs = q.outputs();
+        List<Resolved.Output> outputs = q.outputs();
         for (int i = 0; i < outputs.size(); i++) {
-            Tam.Output o = outputs.get(i);
+            Resolved.Output o = outputs.get(i);
             sql.append("       ");
             if (i < q.groups().size()) {
                 sql.append(DERIVED).append(".").append(quote(o.alias()));
@@ -203,12 +203,12 @@ public final class SqlServerGenerator implements QueryTranslator {
     }
 
     /** Distinct base columns the measures need, given stable names free of the group aliases. */
-    private static Map<Catalog.Field, String> derivedColumnNames(Tam.Query q) {
+    private static Map<Catalog.Field, String> derivedColumnNames(Resolved.Query q) {
         Set<Catalog.Field> used = new LinkedHashSet<>();
-        for (Tam.Output m : q.measures()) collectColumns(m.expr(), used);
+        for (Resolved.Output m : q.measures()) collectColumns(m.expr(), used);
 
         Set<String> taken = new LinkedHashSet<>();
-        for (Tam.Output g : q.groups()) taken.add(g.alias());
+        for (Resolved.Output g : q.groups()) taken.add(g.alias());
 
         Map<Catalog.Field, String> names = new LinkedHashMap<>();
         int next = 0;
@@ -222,24 +222,24 @@ public final class SqlServerGenerator implements QueryTranslator {
         return names;
     }
 
-    private static void collectColumns(Tam.Expr e, Set<Catalog.Field> out) {
+    private static void collectColumns(Resolved.Expr e, Set<Catalog.Field> out) {
         switch (e) {
-            case Tam.Column c -> out.add(c.field());
-            case Tam.Unary u -> collectColumns(u.operand(), out);
-            case Tam.Binary b -> {
+            case Resolved.Column c -> out.add(c.field());
+            case Resolved.Unary u -> collectColumns(u.operand(), out);
+            case Resolved.Binary b -> {
                 collectColumns(b.left(), out);
                 collectColumns(b.right(), out);
             }
-            case Tam.Window ignored -> { }
-            case Tam.Func f -> f.args().forEach(a -> collectColumns(a, out));
-            case Tam.Case c -> {
-                for (Tam.When w : c.whens()) {
+            case Resolved.Window ignored -> { }
+            case Resolved.Func f -> f.args().forEach(a -> collectColumns(a, out));
+            case Resolved.Case c -> {
+                for (Resolved.When w : c.whens()) {
                     collectColumns(w.condition(), out);
                     collectColumns(w.result(), out);
                 }
                 if (c.otherwise() != null) collectColumns(c.otherwise(), out);
             }
-            case Tam.Aggregate a -> {
+            case Resolved.Aggregate a -> {
                 if (a.argument() != null) collectColumns(a.argument(), out);
                 if (a.filter() != null) collectColumns(a.filter(), out);
             }
@@ -247,26 +247,26 @@ public final class SqlServerGenerator implements QueryTranslator {
         }
     }
 
-    private static void collectColumns(Tam.Pred p, Set<Catalog.Field> out) {
+    private static void collectColumns(Resolved.Pred p, Set<Catalog.Field> out) {
         switch (p) {
-            case Tam.And a -> a.operands().forEach(o -> collectColumns(o, out));
-            case Tam.Or o -> o.operands().forEach(x -> collectColumns(x, out));
-            case Tam.Not n -> collectColumns(n.operand(), out);
-            case Tam.Compare c -> {
+            case Resolved.And a -> a.operands().forEach(o -> collectColumns(o, out));
+            case Resolved.Or o -> o.operands().forEach(x -> collectColumns(x, out));
+            case Resolved.Not n -> collectColumns(n.operand(), out);
+            case Resolved.Compare c -> {
                 collectColumns(c.left(), out);
                 collectColumns(c.right(), out);
             }
-            case Tam.InList i -> {
+            case Resolved.InList i -> {
                 collectColumns(i.subject(), out);
                 i.items().forEach(x -> collectColumns(x, out));
             }
-            case Tam.Between b -> {
+            case Resolved.Between b -> {
                 collectColumns(b.subject(), out);
                 collectColumns(b.low(), out);
                 collectColumns(b.high(), out);
             }
-            case Tam.IsNull n -> collectColumns(n.subject(), out);
-            case Tam.Like l -> {
+            case Resolved.IsNull n -> collectColumns(n.subject(), out);
+            case Resolved.Like l -> {
                 collectColumns(l.subject(), out);
                 collectColumns(l.pattern(), out);
             }
@@ -275,10 +275,10 @@ public final class SqlServerGenerator implements QueryTranslator {
 
     // ------------------------------------------------------------------
 
-    private void selectClause(Tam.Query q) {
+    private void selectClause(Resolved.Query q) {
         selectKeyword(q);
 
-        List<Tam.Output> outputs = q.outputs();
+        List<Resolved.Output> outputs = q.outputs();
         for (int i = 0; i < outputs.size(); i++) {
             sql.append("       ");
             expr(outputs.get(i).expr());
@@ -299,12 +299,12 @@ public final class SqlServerGenerator implements QueryTranslator {
      *                     FROM ( ...GROUP BY... ) g ) w
      *   WHERE w.[rank] <= ?
      */
-    private void analysisWithWindows(Tam.Query q) {
+    private void analysisWithWindows(Resolved.Query q) {
         boolean ranked = q.rankFilter() != null;
 
         if (ranked) {
             selectKeyword(q);
-            List<Tam.Output> outputs = q.outputs();
+            List<Resolved.Output> outputs = q.outputs();
             for (int i = 0; i < outputs.size(); i++) {
                 sql.append("       ").append(RANKED).append(".").append(quote(outputs.get(i).alias()))
                    .append(" AS ").append(quote(outputs.get(i).alias()));
@@ -319,9 +319,9 @@ public final class SqlServerGenerator implements QueryTranslator {
             if (!ranked) selectKeyword(q);
             else sql.append("SELECT\n");
 
-            for (Tam.Output o : q.outputs()) {
+            for (Resolved.Output o : q.outputs()) {
                 sql.append("       ");
-                if (o.expr() instanceof Tam.Window w) window(w);
+                if (o.expr() instanceof Resolved.Window w) window(w);
                 else sql.append(WINDOWED).append(".").append(quote(o.alias()));
                 sql.append(" AS ").append(quote(o.alias())).append(",\n");
             }
@@ -350,8 +350,8 @@ public final class SqlServerGenerator implements QueryTranslator {
     }
 
     /** The grouped query, without TOP or ORDER BY -- those belong to the outermost level. */
-    private void groupedQuery(Tam.Query q) {
-        Tam.Query grouped = new Tam.Query(q.kind(), q.entity(), q.joins(), q.groups(), q.measures(),
+    private void groupedQuery(Resolved.Query q) {
+        Resolved.Query grouped = new Resolved.Query(q.kind(), q.entity(), q.joins(), q.groups(), q.measures(),
                 List.of(), List.of(), q.filter(), List.of(), null, null);
         if (needsDerivedTable(grouped)) {
             analysisOverDerivedTable(grouped);
@@ -363,7 +363,7 @@ public final class SqlServerGenerator implements QueryTranslator {
         }
     }
 
-    private void window(Tam.Window w) {
+    private void window(Resolved.Window w) {
         switch (w.function()) {
             // A share of zero would divide by zero (error 8134), so it yields NULL instead.
             case "share" -> {
@@ -386,12 +386,12 @@ public final class SqlServerGenerator implements QueryTranslator {
         }
     }
 
-    private void rowNumber(Tam.RankFilter rank) {
+    private void rowNumber(Resolved.RankFilter rank) {
         sql.append("ROW_NUMBER()");
         over(rank.partition(), rank.order(), rank.descending());
     }
 
-    private void over(List<Tam.OutputRef> partition, Tam.OutputRef order, boolean descending) {
+    private void over(List<Resolved.OutputRef> partition, Resolved.OutputRef order, boolean descending) {
         sql.append(" OVER (");
         if (!partition.isEmpty()) {
             sql.append("PARTITION BY ");
@@ -422,7 +422,7 @@ public final class SqlServerGenerator implements QueryTranslator {
     }
 
     /** TOP appears only when the query asked for one, so the SQL mirrors the TAQL. */
-    private void selectKeyword(Tam.Query q) {
+    private void selectKeyword(Resolved.Query q) {
         sql.append("SELECT");
         if (q.limit() != null) {
             sql.append(" TOP (");
@@ -432,7 +432,7 @@ public final class SqlServerGenerator implements QueryTranslator {
         sql.append("\n");
     }
 
-    private void fromClause(Tam.Query q) {
+    private void fromClause(Resolved.Query q) {
         Catalog.Entity e = q.entity();
         String root = tableAliases.get(ROOT);
         sql.append("FROM ").append(table(e.table(), root)).append("\n");
@@ -455,15 +455,15 @@ public final class SqlServerGenerator implements QueryTranslator {
         }
     }
 
-    private void whereClause(Tam.Query q) {
+    private void whereClause(Resolved.Query q) {
         if (q.filter() == null) return;
         sql.append("WHERE ");
         pred(q.filter());
         sql.append("\n");
     }
 
-    private void groupByClause(Tam.Query q) {
-        if (q.kind() != Tam.Kind.ANALYSIS || q.groups().isEmpty()) return;
+    private void groupByClause(Resolved.Query q) {
+        if (q.kind() != Resolved.Kind.ANALYSIS || q.groups().isEmpty()) return;
         sql.append("GROUP BY ");
         for (int i = 0; i < q.groups().size(); i++) {
             if (i > 0) sql.append(", ");
@@ -473,12 +473,12 @@ public final class SqlServerGenerator implements QueryTranslator {
         sql.append("\n");
     }
 
-    private void orderByClause(Tam.Query q) {
+    private void orderByClause(Resolved.Query q) {
         if (q.sort().isEmpty()) return;
         sql.append("ORDER BY ");
         for (int i = 0; i < q.sort().size(); i++) {
             if (i > 0) sql.append(", ");
-            Tam.Sort s = q.sort().get(i);
+            Resolved.Sort s = q.sort().get(i);
             expr(s.expr());
             sql.append(s.descending() ? " DESC" : " ASC");
         }
@@ -489,37 +489,37 @@ public final class SqlServerGenerator implements QueryTranslator {
     // Expressions
     // ------------------------------------------------------------------
 
-    private void expr(Tam.Expr e) {
+    private void expr(Resolved.Expr e) {
         switch (e) {
-            case Tam.Column c -> {
+            case Resolved.Column c -> {
                 String derived = derivedNames == null ? null : derivedNames.get(c.field());
                 if (derived != null) sql.append(DERIVED).append(".").append(quote(derived));
                 else sql.append(aliasOf(c.field())).append(".").append(quote(c.field().column()));
             }
-            case Tam.OutputRef o -> sql.append(quote(o.alias()));
-            case Tam.NullValue ignored -> sql.append("NULL");
-            case Tam.LiteralRef l -> value(l);
-            case Tam.Constant c -> value(c);
-            case Tam.Unary u -> {
+            case Resolved.OutputRef o -> sql.append(quote(o.alias()));
+            case Resolved.NullValue ignored -> sql.append("NULL");
+            case Resolved.LiteralRef l -> value(l);
+            case Resolved.Constant c -> value(c);
+            case Resolved.Unary u -> {
                 sql.append("(").append(u.op());
                 expr(u.operand());
                 sql.append(")");
             }
-            case Tam.Binary b -> {
+            case Resolved.Binary b -> {
                 sql.append("(");
                 expr(b.left());
                 sql.append(" ").append(b.op()).append(" ");
                 expr(b.right());
                 sql.append(")");
             }
-            case Tam.Func f -> func(f);
-            case Tam.Case c -> caseExpr(c);
-            case Tam.Aggregate a -> aggregate(a);
-            case Tam.Window w -> window(w);
+            case Resolved.Func f -> func(f);
+            case Resolved.Case c -> caseExpr(c);
+            case Resolved.Aggregate a -> aggregate(a);
+            case Resolved.Window w -> window(w);
         }
     }
 
-    private void func(Tam.Func f) {
+    private void func(Resolved.Func f) {
         switch (f.name()) {
             case "year", "month", "day" -> {
                 sql.append(f.name().toUpperCase()).append("(");
@@ -543,9 +543,9 @@ public final class SqlServerGenerator implements QueryTranslator {
         }
     }
 
-    private void caseExpr(Tam.Case c) {
+    private void caseExpr(Resolved.Case c) {
         sql.append("CASE");
-        for (Tam.When w : c.whens()) {
+        for (Resolved.When w : c.whens()) {
             sql.append(" WHEN ");
             pred(w.condition());
             sql.append(" THEN ");
@@ -563,7 +563,7 @@ public final class SqlServerGenerator implements QueryTranslator {
      * filtered subquery, so several differently-filtered measures still read
      * the table once.
      */
-    private void aggregate(Tam.Aggregate a) {
+    private void aggregate(Resolved.Aggregate a) {
         boolean isCount = a.function().equals("count");
 
         if (isCount && a.argument() == null) {
@@ -596,21 +596,21 @@ public final class SqlServerGenerator implements QueryTranslator {
     // Predicates
     // ------------------------------------------------------------------
 
-    private void pred(Tam.Pred p) {
+    private void pred(Resolved.Pred p) {
         switch (p) {
-            case Tam.And a -> combine(a.operands(), " AND ");
-            case Tam.Or o -> combine(o.operands(), " OR ");
-            case Tam.Not n -> {
+            case Resolved.And a -> combine(a.operands(), " AND ");
+            case Resolved.Or o -> combine(o.operands(), " OR ");
+            case Resolved.Not n -> {
                 sql.append("NOT (");
                 pred(n.operand());
                 sql.append(")");
             }
-            case Tam.Compare c -> {
+            case Resolved.Compare c -> {
                 expr(c.left());
                 sql.append(" ").append(sqlOperator(c.op())).append(" ");
                 expr(c.right());
             }
-            case Tam.InList i -> {
+            case Resolved.InList i -> {
                 expr(i.subject());
                 sql.append(i.negated() ? " NOT IN (" : " IN (");
                 for (int k = 0; k < i.items().size(); k++) {
@@ -619,18 +619,18 @@ public final class SqlServerGenerator implements QueryTranslator {
                 }
                 sql.append(")");
             }
-            case Tam.Between b -> {
+            case Resolved.Between b -> {
                 expr(b.subject());
                 sql.append(b.negated() ? " NOT BETWEEN " : " BETWEEN ");
                 expr(b.low());
                 sql.append(" AND ");
                 expr(b.high());
             }
-            case Tam.IsNull n -> {
+            case Resolved.IsNull n -> {
                 expr(n.subject());
                 sql.append(n.negated() ? " IS NOT NULL" : " IS NULL");
             }
-            case Tam.Like l -> {
+            case Resolved.Like l -> {
                 expr(l.subject());
                 sql.append(l.negated() ? " NOT LIKE " : " LIKE ");
                 expr(l.pattern());
@@ -638,10 +638,10 @@ public final class SqlServerGenerator implements QueryTranslator {
         }
     }
 
-    private void combine(List<Tam.Pred> operands, String separator) {
+    private void combine(List<Resolved.Pred> operands, String separator) {
         for (int i = 0; i < operands.size(); i++) {
             if (i > 0) sql.append(separator);
-            boolean parenthesise = operands.get(i) instanceof Tam.And || operands.get(i) instanceof Tam.Or;
+            boolean parenthesise = operands.get(i) instanceof Resolved.And || operands.get(i) instanceof Resolved.Or;
             if (parenthesise) sql.append("(");
             pred(operands.get(i));
             if (parenthesise) sql.append(")");
@@ -653,13 +653,13 @@ public final class SqlServerGenerator implements QueryTranslator {
     // ------------------------------------------------------------------
 
     /** The only path by which a value reaches the statement -- and it is always a '?'. */
-    private void value(Tam.Expr e) {
+    private void value(Resolved.Expr e) {
         switch (e) {
-            case Tam.LiteralRef l -> {
+            case Resolved.LiteralRef l -> {
                 parameters.add(new Plan.Auto(l.slot(), l.type(), l.physicalType()));
                 sql.append("?");
             }
-            case Tam.Constant c -> {
+            case Resolved.Constant c -> {
                 parameters.add(new Plan.Constant(c.value(), c.type(), c.physicalType()));
                 sql.append("?");
             }

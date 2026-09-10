@@ -1,14 +1,14 @@
 package ch.lenglet.taql;
 
 import ch.lenglet.taql.plan.Plan;
-import ch.lenglet.taql.sem.Tam;
+import ch.lenglet.taql.sem.Resolved;
 
 /**
  * Turns a resolved query into a statement in some target query language.
  *
  * The pipeline in front of this is language-agnostic: text parses to an
  * {@link ch.lenglet.taql.ast.Ast}, resolves against a
- * {@link ch.lenglet.taql.catalog.Catalog} into {@link Tam}, and none of it names
+ * {@link ch.lenglet.taql.catalog.Catalog} into {@link Resolved}, and none of it names
  * a dialect. This interface is the one place a query becomes T-SQL -- or, in
  * time, Cypher.
  *
@@ -33,7 +33,7 @@ import ch.lenglet.taql.sem.Tam;
  * the resolver needs to turn that into a positioned diagnostic rather than
  * letting the translator throw {@code IllegalStateException} at a caller. The
  * open question is the granularity: per function, per construct, or one check
- * over a whole {@link Tam.Query}. That wants a real second implementation to
+ * over a whole {@link Resolved.Query}. That wants a real second implementation to
  * answer, because an interface extracted from one is shaped like that one.
  */
 public interface QueryTranslator {
@@ -55,5 +55,5 @@ public interface QueryTranslator {
      * whatever state one translation needs belongs to the call, not the
      * instance.
      */
-    Plan translate(Tam.Query query, String shapeKey);
+    Plan translate(Resolved.Query query, String shapeKey);
 }
