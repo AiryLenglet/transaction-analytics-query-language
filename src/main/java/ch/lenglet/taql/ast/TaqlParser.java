@@ -66,6 +66,14 @@ public final class TaqlParser {
      *                         Keep {@code openapi.yaml}'s {@code maxLength} in
      *                         step: a contract the server will not honour is
      *                         worse than either bound alone.
+     * @param maxAliasLength   how long an output name may be. 128 is what SQL
+     *                         Server allows an identifier, and an alias is the
+     *                         one piece of caller text that reaches the
+     *                         statement as an identifier rather than a
+     *                         parameter. Without this the store rejects the
+     *                         statement at run time -- error 103, classified
+     *                         UNKNOWN, reported as a server fault -- so a
+     *                         caller could turn their own mistake into a 500.
      * @param maxNestingDepth  how deep expressions and predicates may nest.
      *                         This is the bound that actually protects the
      *                         stack, and it protects every later pass too --
@@ -76,12 +84,13 @@ public final class TaqlParser {
      *                         query nests, and an order of magnitude short of
      *                         where the walks start to fail.
      */
-    public record Limits(int maxSourceLength, int maxNestingDepth) {
+    public record Limits(int maxSourceLength, int maxAliasLength, int maxNestingDepth) {
 
-        public static final Limits DEFAULTS = new Limits(8192, 256);
+        public static final Limits DEFAULTS = new Limits(8192, 128, 256);
 
         public Limits {
             if (maxSourceLength < 1) throw new IllegalArgumentException("maxSourceLength must be positive");
+            if (maxAliasLength < 1) throw new IllegalArgumentException("maxAliasLength must be positive");
             if (maxNestingDepth < 1) throw new IllegalArgumentException("maxNestingDepth must be positive");
         }
     }
@@ -95,7 +104,7 @@ public final class TaqlParser {
         try {
             ch.lenglet.taql.grammar.TaqlParser.QueryContext tree = parseFast(source);
             if (tree == null) tree = parseWithDiagnostics(source);
-            return AstBuilder.build(tree, limits.maxNestingDepth());
+            return AstBuilder.build(tree, limits);
         } catch (StackOverflowError overflow) {
             // maxNestingDepth is the real bound; this covers a thread given a
             // smaller stack than that was measured against. Parsing is a pure

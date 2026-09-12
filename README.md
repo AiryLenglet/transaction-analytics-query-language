@@ -346,13 +346,22 @@ Bounds a deployment sets, none of them part of the language:
 | bound | default | where |
 |---|---|---|
 | query length | 8192 characters | `TaqlParser.Limits` |
+| output name length | 128 characters | `TaqlParser.Limits` |
 | nesting depth | 256 levels | `TaqlParser.Limits`, enforced as the AST is built |
 | rows returned | 10 000 | `JdbcPlanRunner.Options` |
 | statement timeout | 30 s | `JdbcPlanRunner.Options` |
 | retry attempts | 3, jittered backoff | `RetryingPlanRunner.Options` |
 | circuit opens after | 5 consecutive store failures, for 10 s | `CircuitBreakingPlanRunner.Options` |
 
-Exceeding one is a `limit` diagnostic, positioned like any other. The nesting
+Exceeding one is a `limit` diagnostic, positioned like any other — except the
+output name, which is a `syntax` one, because it is refused while the tree is
+being built.
+
+The name limit is SQL Server's identifier length. An alias is the only caller
+text that reaches the statement as an identifier rather than as a parameter, so
+it is the only one whose length the store cares about; left to the database it
+returns error 103, which no rule classifies, and the caller gets a 500 for a
+mistake that was theirs. The nesting
 bound is what protects the stack: the resolver, the printer and the SQL
 generator all walk the tree recursively, so a tree they could not survive is
 never built. The row ceiling fails the query rather than truncating it — an

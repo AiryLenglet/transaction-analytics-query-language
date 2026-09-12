@@ -29,15 +29,17 @@ public final class AstBuilder {
      * survive must never be built in the first place. Checked in {@link #expr}
      * and {@link #pred}, which is where all nesting goes through.
      */
-    private final int maxDepth;
+    // Spelled out: the generated parser is what TaqlParser means in this file.
+    private final ch.lenglet.taql.ast.TaqlParser.Limits limits;
     private int depth;
 
-    private AstBuilder(int maxDepth) {
-        this.maxDepth = maxDepth;
+    private AstBuilder(ch.lenglet.taql.ast.TaqlParser.Limits limits) {
+        this.limits = limits;
     }
 
-    public static Ast.Query build(TaqlParser.QueryContext tree, int maxNestingDepth) {
-        AstBuilder builder = new AstBuilder(maxNestingDepth);
+    public static Ast.Query build(TaqlParser.QueryContext tree,
+                                  ch.lenglet.taql.ast.TaqlParser.Limits limits) {
+        AstBuilder builder = new AstBuilder(limits);
         Ast.Stmt stmt = builder.statement(tree.statement());
         return new Ast.Query(stmt, List.copyOf(builder.literals), AstPrinter.canonical(stmt));
     }
@@ -57,7 +59,8 @@ public final class AstBuilder {
         List<Ast.GroupKey> groups = new ArrayList<>();
         for (TaqlParser.GroupKeyContext g : ctx.groupKeyList().groupKey()) {
             Ast.Expr expr = expr(g.expression());
-            String alias = g.identifier() != null ? name(g.identifier()) : impliedAlias(expr, g.expression(), "group");
+            String alias = alias(g.identifier() != null ? name(g.identifier())
+                    : impliedAlias(expr, g.expression(), "group"), g);
             groups.add(new Ast.GroupKey(alias, expr, pos(g)));
         }
 
@@ -66,7 +69,8 @@ public final class AstBuilder {
             TaqlParser.AggregateCallContext agg = aggregateCall(m);
             String function = name(agg.identifier());
             Ast.Expr argument = agg.expression() != null ? expr(agg.expression()) : null;
-            String alias = m.identifier() != null ? name(m.identifier()) : impliedMeasureAlias(function, argument, agg);
+            String alias = alias(m.identifier() != null ? name(m.identifier())
+                    : impliedMeasureAlias(function, argument, agg), m);
             Ast.Pred filter = m.predicate() != null ? pred(m.predicate()) : null;
             measures.add(new Ast.Measure(alias, function, agg.DISTINCT() != null, argument, filter,
                     within(m.withinClause()), ordering(m.orderedClause()), pos(m)));
@@ -85,7 +89,8 @@ public final class AstBuilder {
         List<Ast.Projection> projections = new ArrayList<>();
         for (TaqlParser.ProjectionContext p : ctx.projectionBlock().projection()) {
             Ast.Expr expr = expr(p.expression());
-            String alias = p.identifier() != null ? name(p.identifier()) : impliedAlias(expr, p.expression(), "column");
+            String alias = alias(p.identifier() != null ? name(p.identifier())
+                    : impliedAlias(expr, p.expression(), "column"), p);
             projections.add(new Ast.Projection(alias, expr, pos(p)));
         }
 
@@ -233,7 +238,7 @@ public final class AstBuilder {
     // ------------------------------------------------------------------
 
     private Ast.Pred pred(TaqlParser.PredicateContext ctx) {
-        if (++depth > maxDepth) throw tooDeep(ctx);
+        if (++depth > limits.maxNestingDepth()) throw tooDeep(ctx);
         try {
             return or(ctx.orPredicate());
         } finally {
@@ -256,7 +261,7 @@ public final class AstBuilder {
     private Ast.Pred unary(TaqlParser.UnaryPredicateContext ctx) {
         // 'not' recurses here rather than through pred(), so it is counted here
         // too -- otherwise its only bound would be maxSourceLength by accident.
-        if (++depth > maxDepth) throw tooDeep(ctx);
+        if (++depth > limits.maxNestingDepth()) throw tooDeep(ctx);
         try {
             return unaryPredicate(ctx);
         } finally {
@@ -306,7 +311,7 @@ public final class AstBuilder {
     // ------------------------------------------------------------------
 
     private Ast.Expr expr(TaqlParser.ExpressionContext ctx) {
-        if (++depth > maxDepth) throw tooDeep(ctx);
+        if (++depth > limits.maxNestingDepth()) throw tooDeep(ctx);
         try {
             return expression(ctx);
         } finally {
@@ -459,10 +464,26 @@ public final class AstBuilder {
         return new Ast.Pos(t.getLine(), t.getCharPositionInLine() + 1);
     }
 
+    /**
+     * An output name is the only caller text that reaches the statement as an
+     * identifier rather than as a parameter, so it is the only one whose length
+     * the store cares about. Refused here, with a position, rather than by the
+     * database at run time -- where it arrives as error 103, is classified
+     * UNKNOWN because no rule covers it, and is reported to the caller as a
+     * server fault for a mistake that was theirs.
+     */
+    private String alias(String alias, ParserRuleContext ctx) {
+        if (alias.length() > limits.maxAliasLength()) {
+            throw error(ctx, "the name '" + alias.substring(0, 20) + "...' is " + alias.length()
+                    + " characters; the limit is " + limits.maxAliasLength());
+        }
+        return alias;
+    }
+
     private TaqlException tooDeep(ParserRuleContext ctx) {
         Ast.Pos p = pos(ctx);
         return new TaqlException(new Diagnostic(Diagnostic.Phase.LIMIT, p.line(), p.column(),
-                "this query nests more than " + maxDepth + " levels deep"));
+                "this query nests more than " + limits.maxNestingDepth() + " levels deep"));
     }
 
     private static TaqlException error(ParserRuleContext ctx, String message) {

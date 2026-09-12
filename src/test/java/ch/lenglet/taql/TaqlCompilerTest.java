@@ -443,7 +443,7 @@ class TaqlCompilerTest {
             // call, and while parsing was static they were not reachable at all.
             TaqlCompiler strict = new TaqlCompiler(DemoCatalog.create(),
                     new ch.lenglet.taql.sql.SqlServerGenerator(),
-                    new TaqlParser(new TaqlParser.Limits(64, 4)),
+                    new TaqlParser(new TaqlParser.Limits(64, 128, 4)),
                     Resolver.Options.DEFAULTS,
                     new ch.lenglet.taql.cache.LruPlanCache<>(16));
 
@@ -459,6 +459,36 @@ class TaqlCompilerTest {
             compiler.compile(nested);
             var tooDeep = assertThrows(TaqlException.class, () -> strict.compile(nested));
             assertTrue(tooDeep.getMessage().contains("nests more than 4"), tooDeep.getMessage());
+        }
+
+        @Test
+        void anOutputNameLongerThanTheStoreAllowsIsRefusedHere() {
+            // An alias is the only caller text that reaches the statement as an
+            // identifier rather than as a parameter, so it is the only one whose
+            // length the store cares about. Left to the database it comes back
+            // as error 103, which no rule classifies, so it reaches the caller
+            // as a 500 for a mistake that was theirs.
+            String longest = "a".repeat(128);
+            compiler.compileUncached("list { `" + longest + "` = TransactionId }");
+
+            TaqlException e = assertThrows(TaqlException.class, () ->
+                    compiler.compileUncached("list { `" + longest + "a` = TransactionId }"));
+            assertTrue(e.getMessage().contains("is 129 characters"), e.getMessage());
+            assertTrue(e.getMessage().contains("the limit is 128"), e.getMessage());
+            assertTrue(e.diagnostics().getFirst().column() > 0, e.toString());
+        }
+
+        @Test
+        void everyKindOfOutputNameIsChecked() {
+            String tooLong = "a".repeat(200);
+            for (String query : List.of(
+                    "list { `" + tooLong + "` = TransactionId }",
+                    "analysis by `" + tooLong + "` = Country { n = count() }",
+                    "analysis by Country { `" + tooLong + "` = sum(TransactionValue) }")) {
+                TaqlException e = assertThrows(TaqlException.class,
+                        () -> compiler.compileUncached(query), query);
+                assertTrue(e.getMessage().contains("the limit is 128"), query + " -> " + e.getMessage());
+            }
         }
 
         @Test
