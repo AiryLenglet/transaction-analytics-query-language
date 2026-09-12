@@ -13,6 +13,9 @@ import ch.lenglet.taql.sql.SqlServerGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.Map;
 
@@ -52,6 +55,17 @@ public final class TaqlCompiler {
     private final Resolver.Options options;
     private final PlanCache<String, Plan> plans;
 
+    /**
+     * What this compiler resolves against, folded into every cache key.
+     *
+     * A shape key describes the query and nothing else -- it is computed before
+     * resolution, so it cannot know which column a name refers to. Two compilers
+     * handed the same cache and different catalogs would therefore agree on the
+     * key and disagree on the answer, and the second would be served the first's
+     * plan: the same query text reading a different column.
+     */
+    private final String catalogKey;
+
     public TaqlCompiler(Catalog catalog) {
         this(catalog, new SqlServerGenerator(), Resolver.Options.DEFAULTS, 512);
     }
@@ -88,6 +102,7 @@ public final class TaqlCompiler {
         this.parser = parser;
         this.options = options;
         this.plans = plans;
+        this.catalogKey = fingerprintOf(catalog);
     }
 
     /** A plan together with the literal values of the specific query text it came from. */
@@ -114,7 +129,7 @@ public final class TaqlCompiler {
 
     public Compiled compile(String source) {
         Ast.Query parsed = parser.parse(source);
-        Plan plan = plans.get(parsed.shapeKey(), shape -> {
+        Plan plan = plans.get(catalogKey + parsed.shapeKey(), shape -> {
             Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, translator);
             Plan generated = translator.translate(resolved.query(), shape);
             log.debug("plan {} compiled, {} parameters\n{}",
@@ -129,11 +144,36 @@ public final class TaqlCompiler {
     public Plan compileUncached(String source) {
         Ast.Query parsed = parser.parse(source);
         Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, translator);
-        return translator.translate(resolved.query(), parsed.shapeKey());
+        return translator.translate(resolved.query(), catalogKey + parsed.shapeKey());
     }
 
     public Resolved.Query analyse(String source) {
         return Resolver.resolve(catalog, parser.parse(source), options, translator).query();
+    }
+
+    /**
+     * A short digest of everything in the catalog that can change generated SQL:
+     * which entities exist, the tables behind them, the joins, and every field's
+     * name, type and column.
+     *
+     * A digest rather than the catalog itself because this prefixes every cache
+     * key; SHA-256 truncated to 64 bits, where a collision would mean serving
+     * the wrong plan and is therefore not a place to economise further.
+     */
+    private static String fingerprintOf(Catalog catalog) {
+        StringBuilder described = new StringBuilder();
+        catalog.entities().entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())      // Map.copyOf does not order
+                .forEach(e -> described.append(e.getKey()).append('=').append(e.getValue()).append(';'));
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(described.toString().getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(17);
+            for (int i = 0; i < 8; i++) hex.append("%02x".formatted(digest[i]));
+            return hex.append('|').toString();
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("every JVM has SHA-256", impossible);
+        }
     }
 
     public PlanCache<String, Plan> plans() {

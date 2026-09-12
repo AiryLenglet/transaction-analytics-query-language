@@ -632,6 +632,44 @@ class TaqlCompilerTest {
         }
 
         @Test
+        void twoCatalogsSharingACacheDoNotShareItsPlans() {
+            // A shape key is computed before resolution, so it cannot know which
+            // column a name refers to. Two compilers handed one cache would
+            // otherwise agree on the key and disagree on the answer, and the
+            // second would read the first's column under its own name.
+            PlanCache<String, Plan> shared = new ch.lenglet.taql.cache.LruPlanCache<>(64);
+            TaqlCompiler asValue = compilerOver("amount", "TransactionValue", shared);
+            TaqlCompiler asFee = compilerOver("amount", "Fee", shared);
+
+            String query = "list { amount } from t";
+            assertAll(
+                    () -> assertTrue(asValue.compile(query).plan().statement().contains("[TransactionValue]")),
+                    () -> assertTrue(asFee.compile(query).plan().statement().contains("[Fee]")),
+                    () -> assertEquals(2, shared.stats().size(), "one entry per catalog"));
+        }
+
+        @Test
+        void thesameCatalogDescribedTwiceStillSharesOnePlan() {
+            // The key is what the catalog says, not which object said it --
+            // otherwise rebuilding an identical catalog would throw the cache away.
+            PlanCache<String, Plan> shared = new ch.lenglet.taql.cache.LruPlanCache<>(64);
+            TaqlCompiler one = compilerOver("amount", "TransactionValue", shared);
+            TaqlCompiler other = compilerOver("amount", "TransactionValue", shared);
+
+            String query = "list { amount } from t";
+            assertSame(one.compile(query).plan(), other.compile(query).plan());
+            assertEquals(1, shared.stats().size());
+        }
+
+        private TaqlCompiler compilerOver(String field, String column, PlanCache<String, Plan> cache) {
+            Catalog catalog = new Catalog(Map.of("t", new Catalog.Entity("t",
+                    new Catalog.Table("dbo", "Transactions"), List.of(),
+                    List.of(Catalog.Field.of(field, TaqlType.STRING, column, new SqlType.VarChar(50))))));
+            return new TaqlCompiler(catalog, new ch.lenglet.taql.sql.SqlServerGenerator(),
+                    new TaqlParser(), Resolver.Options.DEFAULTS, cache);
+        }
+
+        @Test
         void aCompilerWorksWithACacheThatNeverCaches() {
             // Caching is an optimisation, not part of the semantics: swapping in
             // a cache that stores nothing must change speed and nothing else.

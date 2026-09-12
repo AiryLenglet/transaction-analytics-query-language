@@ -67,7 +67,9 @@ Two things a second backend needs that are deliberately **not** designed yet, be
 
 ## The plan cache, and the shape key
 
-One cache, keyed on `Ast.Query.shapeKey()` — `AstPrinter.canonical(stmt)`, a value-independent rendering of the literal-free AST, computed **before** name resolution. It is reached after parsing, which is the cheap phase; everything expensive sits behind it.
+One cache, keyed on a digest of the catalog plus `Ast.Query.shapeKey()` — `AstPrinter.canonical(stmt)`, a value-independent rendering of the literal-free AST, computed **before** name resolution. It is reached after parsing, which is the cheap phase; everything expensive sits behind it.
+
+**The catalog is in the key because the shape key cannot be.** A shape key is computed before resolution, so it does not know which column a name refers to. Two compilers handed the same `PlanCache` and different catalogs would agree on the key and disagree on the answer — the second served the first's plan, reading a different column under the same name. That is reachable through the public constructor, so the compiler folds a digest of its catalog into every key.
 
 A cache on the source text used to sit in front. It is gone: a query states its own constants and those are what change between two calls, so it hit 0.03% of the time while holding hundreds of queries' worth of client data in memory. Keying only on the shape means nothing a caller asked about is retained between requests.
 
