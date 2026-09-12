@@ -5,9 +5,7 @@ import ch.lenglet.taql.ast.TaqlParser;
 import ch.lenglet.taql.cache.LruPlanCache;
 import ch.lenglet.taql.cache.PlanCache;
 import ch.lenglet.taql.catalog.Catalog;
-import ch.lenglet.taql.plan.FilterRestrictions;
 import ch.lenglet.taql.plan.Plan;
-import ch.lenglet.taql.plan.Restrictions;
 import ch.lenglet.taql.runtime.jdbc.Binder;
 import ch.lenglet.taql.sem.Resolver;
 import ch.lenglet.taql.sem.Resolved;
@@ -15,11 +13,8 @@ import ch.lenglet.taql.sql.SqlServerGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * The full pipeline, plus the two caches that keep it off the hot path.
@@ -107,58 +102,24 @@ public final class TaqlCompiler {
     }
 
     /** A plan together with the literal values of the specific query text it came from. */
-    public record Compiled(Plan plan, List<Object> literals) {
+    /**
+     * A plan together with the query it came from.
+     *
+     * The parsed form is kept because it is what a {@link QueryPolicy} walks --
+     * it holds the statement's shape and, since TAQL has no placeholders, the
+     * constants too. Keeping it costs nothing: it is a function of the query
+     * text, which is exactly what this record is cached under.
+     */
+    public record Compiled(Plan plan, Ast.Query parsed) {
 
-        /**
-         * Everything one call needs. The two travel together because they must
-         * agree: the policy authorises {@link #restrictions()} and the store runs
-         * {@link #values()}.
-         */
-        public record Bound(List<Object> values, Restrictions restrictions) {}
-
-        public Bound bind() {
-            return new Bound(Binder.resolve(plan, literals), restrictionsOf());
-        }
-
-        /**
-         * What this query's filter pins each field down to, for the values it is
-         * about to run with. The plan records where those values live; this is
-         * where they are read.
-         *
-         * Values come back as the caller wrote or supplied them, not as
-         * {@code Binder} will send them -- the two differ only where a physical
-         * type forces a conversion, and an identifier compared for equality is a
-         * string either way.
-         */
-        private Restrictions restrictionsOf() {
-            Map<String, Set<Object>> resolved = new LinkedHashMap<>();
-            plan.restrictions().forEach((field, conjuncts) -> {
-                Set<Object> values = null;
-                for (Plan.Restriction conjunct : conjuncts) {
-                    Set<Object> pinned = valuesOf(conjunct);
-                    // Several conjuncts on one field all hold at once.
-                    if (values == null) values = pinned;
-                    else values.retainAll(pinned);
-                }
-                if (values != null) resolved.put(field, values);
-            });
-            return new Restrictions(resolved);
-        }
-
-        private Set<Object> valuesOf(Plan.Restriction conjunct) {
-            Set<Object> values = new LinkedHashSet<>();
-            for (Plan.ValueRef ref : conjunct.values()) {
-                switch (ref) {
-                    case Plan.ValueRef.Lit l -> values.add(literals.get(l.slot()));
-                }
-            }
-            return values;
+        public List<Object> bind() {
+            return Binder.resolve(plan, parsed.literals());
         }
 
         /** Carries no literal values; see {@link TaqlQuery#toString()}. */
         @Override
         public String toString() {
-            return "Compiled[plan=" + plan.id() + ", literals=" + literals.size() + "]";
+            return "Compiled[plan=" + plan.id() + ", literals=" + parsed.literals().size() + "]";
         }
     }
 
@@ -167,14 +128,13 @@ public final class TaqlCompiler {
             Ast.Query parsed = parser.parse(text);
             Plan plan = shapeCache.get(parsed.shapeKey(), shape -> {
                 Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, translator);
-                Plan generated = translator.translate(resolved.query(), shape)
-                        .restrictedBy(FilterRestrictions.of(resolved.query()));
+                Plan generated = translator.translate(resolved.query(), shape);
                 log.debug("plan {} compiled, {} parameters\n{}",
                         generated.id(), generated.parameters().size(), generated.statement().stripTrailing());
                 log.trace("plan {} has shape {}", generated.id(), shape);
                 return generated;
             });
-            return new Compiled(plan, parsed.literals());
+            return new Compiled(plan, parsed);
         });
     }
 
@@ -182,8 +142,7 @@ public final class TaqlCompiler {
     public Plan compileUncached(String source) {
         Ast.Query parsed = parser.parse(source);
         Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, translator);
-        return translator.translate(resolved.query(), parsed.shapeKey())
-                .restrictedBy(FilterRestrictions.of(resolved.query()));
+        return translator.translate(resolved.query(), parsed.shapeKey());
     }
 
     public Resolved.Query analyse(String source) {

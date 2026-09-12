@@ -347,7 +347,7 @@ class TaqlCompilerTest {
     class Binding {
 
         private List<Object> bind(String query) {
-            return compiler.compile(query).bind().values();
+            return compiler.compile(query).bind();
         }
 
         private TaqlException rejected(String query) {
@@ -492,8 +492,8 @@ class TaqlCompilerTest {
             var first = compiler.compile("list { transactionId } over { clientId = '1' }");
             var second = compiler.compile("list { transactionId } over { clientId = '999' }");
             assertSame(first.plan(), second.plan());
-            assertEquals("1", first.bind().values().getFirst());
-            assertEquals("999", second.bind().values().getFirst());
+            assertEquals("1", first.bind().getFirst());
+            assertEquals("999", second.bind().getFirst());
         }
 
         @Test
@@ -523,8 +523,8 @@ class TaqlCompilerTest {
             var first = compiler.compile(a);
             var second = compiler.compile(b);
             assertSame(first.plan(), second.plan());
-            assertEquals(List.of("1", "2", "C", new java.math.BigDecimal("10")), first.bind().values());
-            assertEquals(List.of("8", "9", "D", new java.math.BigDecimal("99")), second.bind().values());
+            assertEquals(List.of("1", "2", "C", new java.math.BigDecimal("10")), first.bind());
+            assertEquals(List.of("8", "9", "D", new java.math.BigDecimal("99")), second.bind());
         }
 
         @Test
@@ -579,12 +579,12 @@ class TaqlCompilerTest {
             var compiled = compiler.compile(
                     "list { TransactionId } over { TransactionValue > 500 } sort by TransactionId top 5");
             // TOP is emitted before WHERE, so that is the parameter order.
-            assertEquals(List.of(5L, new java.math.BigDecimal("500")), compiled.bind().values());
+            assertEquals(List.of(5L, new java.math.BigDecimal("500")), compiled.bind());
 
             var other = compiler.compile(
                     "list { TransactionId } over { TransactionValue > 20 } sort by TransactionId top 7");
             assertSame(compiled.plan(), other.plan());
-            assertEquals(List.of(7L, new java.math.BigDecimal("20")), other.bind().values());
+            assertEquals(List.of(7L, new java.math.BigDecimal("20")), other.bind());
         }
 
         @Test
@@ -615,8 +615,8 @@ class TaqlCompilerTest {
             var second = uncached.compile(query);
 
             assertAll(
-                    () -> assertEquals(List.of(5L, new java.math.BigDecimal("500")), first.bind().values()),
-                    () -> assertEquals(first.bind().values(), second.bind().values()),
+                    () -> assertEquals(List.of(5L, new java.math.BigDecimal("500")), first.bind()),
+                    () -> assertEquals(first.bind(), second.bind()),
                     () -> assertEquals(first.plan().statement(), second.plan().statement()),
                     // ...and it really did compile twice
                     () -> assertNotSame(first.plan(), second.plan()));
@@ -661,7 +661,7 @@ class TaqlCompilerTest {
                             compiled.plan().statement().lines()
                                     .filter(l -> l.startsWith("WHERE"))
                                     .findFirst().orElseThrow().substring("WHERE ".length())),
-                    () -> assertEquals(payload, compiled.bind().values().getFirst()));
+                    () -> assertEquals(payload, compiled.bind().getFirst()));
         }
 
         @Test
@@ -670,7 +670,7 @@ class TaqlCompilerTest {
                     "list { transactionId } over { clientId in ['ok', 'a''; DROP TABLE x; --'] }");
             assertFalse(compiled.plan().statement().contains("DROP"));
             assertTrue(compiled.plan().statement().contains("IN (?, ?)"), compiled.plan().statement());
-            assertEquals(List.of("ok", "a'; DROP TABLE x; --"), compiled.bind().values());
+            assertEquals(List.of("ok", "a'; DROP TABLE x; --"), compiled.bind());
         }
 
         @Test

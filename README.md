@@ -263,30 +263,27 @@ the database does not have. That is a deployment fault, not a caller fault — a
 
 ## Row authorisation
 
-`QueryPolicy` is consulted for every query, after its values are bound and
-before the database is touched:
+`QueryPolicy` is consulted for every query, after it compiles and before the
+database is touched:
 
 ```java
 new TaqlTemplate(compiler, runner, policy, TaqlTemplate.Options.DEFAULTS)
 ```
 
-```java
-Set<Object> asked = restrictions.on("ClientId").orElseThrow(() -> refuse(
-        "every query must name the clients it reads"));
-if (!permittedFor(caller).containsAll(asked)) refuse("not permitted");
-```
+A policy is handed the parsed query and nothing else — `stmt()` for the shape,
+`literals()` for the constants an `Ast.Lit` points at — and walks it itself. Nothing is pre-computed: a rule about which clients may be read, one
+about which columns may be filtered on, and one capping the size of an `in`
+list ask different questions of the same tree.
 
-It runs that late because it has to. Literals are lifted out of the query at
-parse time, so a cached plan holds a slot index and not `'CH-9021'` — two
-callers asking about different clients share one plan, and the clients only
-exist once the values are bound.
+A rule returns its objections as `Diagnostic`s rather than throwing — a refusal
+is an ordinary outcome, several can be reported at once, and every `Ast` node
+carries a position, so it can say where. An empty list permits.
 
-`restrictions.on(field)` returns the values the filter pins that field to, or
-**empty when it cannot tell** — which a policy must treat as *refuse*. Only
-positive `=` and `in [...]` in a top-level conjunct count. A field
-compared with `like` or a range has no set to enumerate, and one mentioned only
-under an `or` restricts nothing at all: `ClientId = '1' or Country = 'CH'`
-returns every client's rows.
+The trap is that a condition only constrains a result if nothing escapes it. A
+term under an `or` constrains nothing — `ClientId = '1' or Country = 'CH'`
+returns every client's rows — and nor does a negated one. Walk `and` and stop
+at anything else, and the worst a rule can do is refuse a query that would have
+been fine.
 
 ## Limits
 

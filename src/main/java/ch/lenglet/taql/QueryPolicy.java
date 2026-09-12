@@ -1,44 +1,69 @@
 package ch.lenglet.taql;
 
-import ch.lenglet.taql.plan.Restrictions;
+import ch.lenglet.taql.ast.Ast;
+
+import java.util.List;
 
 /**
  * A rule every query must satisfy before it runs.
  *
- * Called after binding and before execution, which is the only point where both
- * halves of the question exist at once: the query's shape, and the values it is
- * about to run with. Literals are lifted out of the tree at parse time and a
- * cached plan holds slot indices, so nothing earlier knows which client was
- * asked about.
+ * The rule walks the parsed query, which holds everything it needs: the
+ * statement's shape, and -- because TAQL has no placeholders -- the values too.
+ * {@link Ast.Query#literals()} holds the constants that were lifted out of the
+ * tree during parsing, and an {@link Ast.Lit} names its slot in that table.
+ *
+ * <h2>The logic belongs to the policy</h2>
+ * Nothing is pre-computed for it. A rule about which clients a query may read,
+ * one about which columns may appear in a filter, one that caps how many values
+ * an {@code in} list may hold -- these ask different questions of the same tree,
+ * and a library guessing which answer to prepare would serve none of them well.
+ * The plan stays what it is: statement text and a parameter recipe.
+ *
+ * <h2>Walking a filter soundly</h2>
+ * The trap, for any rule about what a query reads, is that a condition only
+ * constrains the result if nothing can escape it. A term under an {@code or}
+ * constrains nothing -- {@code ClientId = '1' or Country = 'CH'} returns every
+ * client's rows -- and so does a negated one. A rule that walks into either and
+ * counts what it finds permits exactly the queries it meant to stop. Walk
+ * {@link Ast.And} and stop at anything else, and the worst case is refusing a
+ * query that would have been fine.
+ *
+ * The source text is deliberately not passed. {@link Ast.Query} describes the
+ * query completely, and the raw text is the one form that carries the caller's
+ * constants verbatim -- which is why {@link TaqlQuery#toString()} refuses to
+ * render it. A rule has no use for it that reading the tree does not serve
+ * better.
  *
  * <h2>Refusing</h2>
- * Throw {@link TaqlException} with {@link Diagnostic.Phase#POLICY}. It lands as a
- * 400 carrying a diagnostic, like every other rejection, and the message is
- * returned to the caller -- so say what rule was broken, not what the caller
- * would have needed to satisfy it. "You may not read client CH-9" tells someone
- * that CH-9 exists.
+ * Return the reasons rather than throwing them. A refusal is an ordinary
+ * outcome, not an exception, and returning lets several be reported at once --
+ * the same reason {@code Resolver} accumulates through {@code error()} instead
+ * of failing on the first problem. {@link ch.lenglet.taql.runtime.TaqlTemplate}
+ * turns a non-empty result into one {@link TaqlException}, so a refusal reaches
+ * the caller as a 400 carrying diagnostics, like every other rejection.
  *
- * <h2>Read the empty case as "no"</h2>
- * {@link Restrictions#on} returns empty when a field is not pinned down in any
- * computable way -- no filter, a {@code like}, a range, or a mention that only
- * appears under an {@code or}. A policy that treats empty as "nothing to check"
- * permits exactly the queries that read everything.
+ * Use {@link Diagnostic.Phase#POLICY}, and point at the offending term: every
+ * {@link Ast.Pred} and {@link Ast.Expr} carries a {@link Ast.Pos}, so a rule can
+ * say <em>where</em> as well as what. Say what rule was broken, not what the
+ * caller would have needed to satisfy it -- "you may not read client CH-9" tells
+ * someone that CH-9 exists.
  *
  * <h2>Where the caller comes from</h2>
- * Not from here. This gets the query and its restrictions; an implementation
- * gets the principal from wherever it already lives. That keeps the library out
- * of the business of modelling identity -- and puts the burden on the
- * implementation to refuse when no principal is established, rather than sail
- * past the check.
+ * Not from here. This gets the query and nothing else; an implementation gets
+ * the principal from wherever it already lives. That keeps the library out of the business of
+ * modelling identity -- and puts the burden on the implementation to refuse when
+ * no principal is established, rather than sail past the check.
  */
 @FunctionalInterface
 public interface QueryPolicy {
 
     /** Permits every query. The default, so adding a policy is a deliberate act. */
-    QueryPolicy PERMIT_ALL = (query, restrictions) -> { };
+    QueryPolicy PERMIT_ALL = query -> List.of();
 
     /**
-     * @throws TaqlException if the query may not run as asked
+     * @param query the query as written: {@code stmt()} to walk,
+     *              {@code literals()} to read an {@link Ast.Lit}'s value
+     * @return why this query may not run, or empty to permit it
      */
-    void check(TaqlQuery query, Restrictions restrictions);
+    List<Diagnostic> check(Ast.Query query);
 }

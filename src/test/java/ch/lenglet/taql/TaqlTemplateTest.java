@@ -66,9 +66,8 @@ class TaqlTemplateTest {
         // connections, so this proves the order rather than assuming it.
         int[] connections = {0};
         var counted = countingSource(3, connections);
-        QueryPolicy refuseEverything = (query, restrictions) -> {
-            throw new TaqlException(new Diagnostic(Diagnostic.Phase.POLICY, 0, 0, "no"));
-        };
+        QueryPolicy refuseEverything =
+                parsed -> List.of(new Diagnostic(Diagnostic.Phase.POLICY, 1, 1, "no"));
         var template = new TaqlTemplate(compiler, new JdbcPlanRunner(counted),
                 refuseEverything, TaqlTemplate.Options.DEFAULTS);
 

@@ -45,7 +45,7 @@ class CidTest {
         var compiled = compiler.compile("list { TransactionId } over { ClientId = '" + CID + "' }");
         assertFalse(compiled.toString().contains(CID), compiled.toString());
         // The value is still bindable -- hidden from rendering, not from use.
-        assertTrue(compiled.bind().values().contains(CID));
+        assertTrue(compiled.bind().contains(CID));
     }
 
     @Test
