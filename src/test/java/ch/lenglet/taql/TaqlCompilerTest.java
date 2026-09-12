@@ -944,6 +944,28 @@ class TaqlCompilerTest {
         }
 
         @Test
+        void outputNamesAreMatchedWithoutCaseLikeEveryOtherName() {
+            // The catalog resolves clientId and ClientId to one field, so this
+            // asks for the same column twice -- and the two columns it produced
+            // could only be told apart by capitalisation.
+            for (String query : List.of(
+                    "list { clientId, ClientId }",
+                    "list { foo = TransactionId, FOO = Country }",
+                    "analysis by Country { n = count(), N = sum(TransactionValue) }")) {
+                TaqlException e = assertThrows(TaqlException.class,
+                        () -> compiler.compileUncached(query), query);
+                assertTrue(e.getMessage().contains("differ only in case"), query + " -> " + e.getMessage());
+            }
+        }
+
+        @Test
+        void aNameStillDiffersFromOneSpeltDifferently() {
+            // Only case is ignored, not the rest of the spelling.
+            compiler.compileUncached("list { foo = TransactionId, foo2 = Country }");
+            compiler.compileUncached("analysis by Country { n = count(), total = sum(TransactionValue) }");
+        }
+
+        @Test
         void duplicateOutputNamesAreRejected() {
             TaqlException e = assertThrows(TaqlException.class,
                     () -> compiler.compileUncached("list { a = clientId, a = currency }"));

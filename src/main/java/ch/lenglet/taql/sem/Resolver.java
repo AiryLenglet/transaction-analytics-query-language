@@ -13,6 +13,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -92,7 +93,7 @@ public final class Resolver {
 
     private Resolved.Query analysis(Ast.Analysis a) {
         List<Resolved.Output> groups = new ArrayList<>();
-        Set<String> aliases = new LinkedHashSet<>();
+        Map<String, String> aliases = new LinkedHashMap<>();
         Map<String, TaqlType> groupTypes = new LinkedHashMap<>();
         for (Ast.GroupKey g : a.groups()) {
             Resolved.Expr expr = expr(g.expr(), false);
@@ -159,7 +160,7 @@ public final class Resolver {
     private Resolved.Query flat(Ast.Flat f) {
         List<Resolved.Output> projections = new ArrayList<>();
         Map<String, TaqlType> outputTypes = new LinkedHashMap<>();
-        Set<String> aliases = new LinkedHashSet<>();
+        Map<String, String> aliases = new LinkedHashMap<>();
         for (Ast.Projection p : f.projections()) {
             rejectDuplicateAlias(aliases, p.alias(), p.pos());
             Resolved.Expr expr = expr(p.expr(), false);
@@ -206,10 +207,24 @@ public final class Resolver {
         };
     }
 
-    private void rejectDuplicateAlias(Set<String> seen, String alias, Ast.Pos pos) {
-        if (!seen.add(alias)) {
-            error(pos, Diagnostic.Phase.RESOLUTION, "duplicate output name '" + alias + "'");
-        }
+    /**
+     * Output names are matched the way every other name in a query is: without
+     * case. The catalog resolves {@code clientId} and {@code ClientId} to one
+     * field, so {@code list { clientId, ClientId }} asks for the same column
+     * twice, and accepting it produced two columns whose names a reader has to
+     * tell apart by capitalisation.
+     *
+     * It also kept a promise the store does not have to make. JDBC specifies
+     * {@code ResultSet.findColumn} as case-insensitive; mssql-jdbc happens to
+     * prefer an exact match, so these worked, but nothing entitled them to.
+     */
+    private void rejectDuplicateAlias(Map<String, String> seen, String alias, Ast.Pos pos) {
+        String earlier = seen.putIfAbsent(alias.toLowerCase(Locale.ROOT), alias);
+        if (earlier == null) return;
+        error(pos, Diagnostic.Phase.RESOLUTION, earlier.equals(alias)
+                ? "duplicate output name '" + alias + "'"
+                : "'" + alias + "' and '" + earlier + "' differ only in case,"
+                        + " and names are matched without case, so these are one output");
     }
 
     // ------------------------------------------------------------------
