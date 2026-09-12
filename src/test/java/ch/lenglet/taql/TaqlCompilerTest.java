@@ -104,6 +104,52 @@ class TaqlCompilerTest {
         }
 
         @Test
+        void aMeasureHasToAggregate() {
+            // The one thing a grouped query cannot select: a column that is
+            // neither a group key nor inside an aggregate. The grammar lets it
+            // through so this can name the choice the writer has to make.
+            for (String query : List.of(
+                    "analysis by Country { TransactionValue }",
+                    "analysis by Country { total = TransactionValue }",
+                    "analysis by Country { x = TransactionValue * 2 }",
+                    "analysis by Country { total = sum(TransactionValue), Currency }")) {
+                TaqlException e = assertThrows(TaqlException.class,
+                        () -> compiler.compileUncached(query), query);
+                Diagnostic first = e.diagnostics().getFirst();
+                assertAll(query,
+                        () -> assertTrue(first.message().contains("is not aggregated"), first.message()),
+                        () -> assertTrue(first.message().contains("group on it"), first.message()),
+                        // positioned at the offending measure, not at a stray token
+                        () -> assertTrue(first.column() > 0, first.toString()));
+            }
+        }
+
+        @Test
+        void aFunctionThatIsNotAnAggregateIsStillNamedByTheResolver() {
+            // The grammar cannot tell sum from upper, and should not try: letting
+            // both through is what lets the resolver list what was expected.
+            TaqlException e = assertThrows(TaqlException.class,
+                    () -> compiler.compileUncached("analysis by Country { x = upper(Country) }"));
+            assertEquals(Diagnostic.Phase.RESOLUTION, e.diagnostics().getFirst().phase());
+            assertTrue(e.getMessage().contains("'upper' is not an aggregate"), e.getMessage());
+            assertTrue(e.getMessage().contains("[avg, count, max, min, sum]"), e.getMessage());
+        }
+
+        @Test
+        void anAggregateOutsideTheMeasureBlockIsRejected() {
+            for (String query : List.of(
+                    "analysis by t = sum(TransactionValue) { n = count() }",
+                    "analysis by Country, n = count() { total = sum(TransactionValue) }",
+                    "analysis by Country { x = sum(sum(TransactionValue)) }",
+                    "list { x = sum(TransactionValue) }")) {
+                TaqlException e = assertThrows(TaqlException.class,
+                        () -> compiler.compileUncached(query), query);
+                assertTrue(e.getMessage().contains("is an aggregate and can only appear"),
+                        query + " -> " + e.getMessage());
+            }
+        }
+
+        @Test
         void rejectsTopByAnUnknownMeasure() {
             TaqlException e = assertThrows(TaqlException.class, () -> compiler.compileUncached(
                     "analysis by country { total = sum(TransactionValue) } top 10 by nope"));

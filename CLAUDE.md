@@ -100,6 +100,8 @@ Adding language surface usually means touching this whole chain, in order:
 
 The resolver **collects** diagnostics rather than failing on the first, then throws one `TaqlException` carrying all of them; `error()` accumulates, `fail()` throws immediately. Prefer `error()`.
 
+**Keep the grammar permissive where a rule deserves an explanation.** Three rules are enforced in `AstBuilder` rather than in `Taql.g4`, because ANTLR's "no viable alternative at input" names a token where the user needs to be told what to do instead: clause order (`from → over → sort by → top`), duplicate clauses, and that a measure has to aggregate. `measureBody` accepts any expression so `analysis by Country { TransactionValue }` can answer *measure it, or move it into `by` to group on it* — the choice SQL's rule about grouped columns actually forces. Deciding aggregate-vs-scalar is left further on still: the grammar cannot tell `sum` from `upper`, and letting both through is what lets `Resolver` list what was expected.
+
 ## Type system: two of them, deliberately
 
 - `TaqlType` — the DSL lattice (string, integer, decimal, date, …). Knows nothing about SQL Server.

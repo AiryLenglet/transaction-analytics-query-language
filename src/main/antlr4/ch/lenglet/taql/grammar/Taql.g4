@@ -49,8 +49,18 @@ measureBlock   : LBRACE measure (COMMA? measure)* RBRACE ;
 // Aggregates and window functions share this shape; which one a measure is
 // depends on the function name, and the resolver decides. Splitting them in the
 // grammar would make 'rank(total)' a parse error rather than a named one.
-measure        : (identifier EQ)? aggregate (WHEN predicate)? withinClause? orderedClause? ;
-aggregate      : identifier LPAREN (DISTINCT? expression)? RPAREN ;
+measure        : (identifier EQ)? measureBody (WHEN predicate)? withinClause? orderedClause? ;
+
+// A measure has to aggregate -- a bare column in here is the one thing SQL will
+// not let a grouped query select. The grammar accepts it anyway so the AST
+// builder can say so: rejecting it here gives 'no viable alternative' where the
+// answer is "aggregate it, or group by it".
+//
+// 'sum(x)' matches both alternatives; the first wins, which is what keeps
+// DISTINCT working and keeps 'upper(x)' reaching the resolver by name.
+measureBody    : identifier LPAREN (DISTINCT? expression)? RPAREN   # AggregateCall
+               | expression                                        # NotAnAggregate
+               ;
 
 withinClause   : WITHIN identifier (COMMA identifier)* ;
 orderedClause  : ORDERED BY identifier (ASC | DESC)? ;

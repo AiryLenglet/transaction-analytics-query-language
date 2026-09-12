@@ -63,7 +63,7 @@ public final class AstBuilder {
 
         List<Ast.Measure> measures = new ArrayList<>();
         for (TaqlParser.MeasureContext m : ctx.measureBlock().measure()) {
-            TaqlParser.AggregateContext agg = m.aggregate();
+            TaqlParser.AggregateCallContext agg = aggregateCall(m);
             String function = name(agg.identifier());
             Ast.Expr argument = agg.expression() != null ? expr(agg.expression()) : null;
             String alias = m.identifier() != null ? name(m.identifier()) : impliedMeasureAlias(function, argument, agg);
@@ -95,6 +95,25 @@ public final class AstBuilder {
         Ast.Top top = top(clauses);
 
         return new Ast.Flat(clauses.entity, projections, filter, sort, top, pos(ctx));
+    }
+
+    /**
+     * A measure has to aggregate, and this is where a bare column is turned
+     * away.
+     *
+     * It is the one thing a grouped query cannot select: every column has to be
+     * a group key or sit inside an aggregate, so a measure that is neither has
+     * no meaning to give it. The grammar lets it through on purpose -- refusing
+     * it there produces "no viable alternative at input", and the useful answer
+     * is that the writer has to choose between measuring the column and grouping
+     * on it.
+     */
+    private TaqlParser.AggregateCallContext aggregateCall(TaqlParser.MeasureContext m) {
+        if (m.measureBody() instanceof TaqlParser.AggregateCallContext agg) return agg;
+        String written = m.measureBody().getText();
+        if (written.length() > 40) written = written.substring(0, 40) + "...";
+        throw error(m.measureBody(), "'" + written + "' is not aggregated; measure it with"
+                + " something like sum(" + written + "), or move it into 'by' to group on it");
     }
 
     // ------------------------------------------------------------------
