@@ -291,8 +291,20 @@ Filters.pinnedValues(query, "ClientId")   // Optional<Set<Object>> — pinned to
 Filters.range(query, "TransactionDate")   // Optional<Range>       — confined to an interval
 ```
 
-Empty means *cannot tell*, which a rule must read as refuse. Rules compose, and
-each speaks for itself, so a caller breaking two hears about both:
+Empty means *cannot tell*, which a rule must read as refuse — and that is the
+default rather than a case someone remembered: `Filters` switches exhaustively
+over `Ast.Pred` with no `default`, so adding a predicate to the language will
+not compile until someone has said what it means for authorisation.
+
+**A caller names what it wants; the server checks.** The alternative — the server
+quietly ANDing the caller's clients onto every query — was considered and
+rejected: it would mean the text of a query is no longer the whole question,
+which is the property the rest of the language is built on. The cost is that a
+caller must state its own clients, and a query that states none is refused
+rather than narrowed.
+
+Rules compose, and each speaks for itself, so a caller breaking two hears about
+both:
 
 ```java
 QueryPolicy.all(mustNameItsClients, withinOneYear)
@@ -360,11 +372,6 @@ Deliberate omissions for a POC, roughly in the order I would add them:
 - **Window functions in flat queries.** They are analysis-only: their arguments
   are measure and group-key names, so `rank` over ungrouped rows needs its own
   design for what to order by.
-- **Authorisation by injection.** `QueryPolicy` lets a deployment refuse a query
-  whose `ClientId` set the caller may not read (see *Row authorisation*), but the
-  caller still has to name the clients. Forcing a predicate in — so a query that
-  names none is scoped rather than refused — is the other half, and needs the
-  set of clients a caller may read to be enumerable.
 - **Cost control.** `JdbcPlanRunner` caps rows and every statement is bounded by
   a timeout, but nothing stops `count(distinct x)` over an unfiltered table
   before it runs; a required-filter rule per entity, and a cost estimate from

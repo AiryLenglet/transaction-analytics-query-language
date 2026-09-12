@@ -102,11 +102,21 @@ public final class Filters {
 
     /** Null when this conjunct does not pin the field to a set this can enumerate. */
     private static Set<Object> valuesOf(Ast.Pred conjunct, String field, List<Object> literals) {
+        // Exhaustive over Ast.Pred on purpose, with no default: adding a
+        // predicate to the language will not compile until someone has said
+        // what it means here. Falling through to a default would have been
+        // safe -- an unrecognised form pins nothing, so a rule refuses -- but
+        // silently, and this is the one place where silence is expensive.
         List<Ast.Expr> items = switch (conjunct) {
-            case Ast.Compare c when c.op().equals("=") && names(c.left(), field) -> List.of(c.right());
-            case Ast.Compare c when c.op().equals("=") && names(c.right(), field) -> List.of(c.left());
-            case Ast.InList i when !i.negated() && names(i.subject(), field) -> i.items();
-            default -> null;
+            case Ast.Compare c -> equalityWith(c, field);
+            case Ast.InList i -> i.negated() || !names(i.subject(), field) ? null : i.items();
+
+            case Ast.And ignored -> null;      // already flattened by conjuncts()
+            case Ast.Or ignored -> null;       // a branch may match anything
+            case Ast.Not ignored -> null;      // names what is excluded, not what is kept
+            case Ast.InRange ignored -> null;  // an interval rather than a set; see range()
+            case Ast.IsNull ignored -> null;
+            case Ast.Like ignored -> null;
         };
         if (items == null || items.isEmpty()) return null;
 
@@ -119,6 +129,14 @@ public final class Filters {
             values.add(value);
         }
         return values;
+    }
+
+    /** The other side of {@code field = x}, whichever side the field is written on. */
+    private static List<Ast.Expr> equalityWith(Ast.Compare c, String field) {
+        if (!c.op().equals("=")) return null;
+        if (names(c.left(), field)) return List.of(c.right());
+        if (names(c.right(), field)) return List.of(c.left());
+        return null;
     }
 
     /** Matched the way the catalog matches a field: case-insensitively. */
