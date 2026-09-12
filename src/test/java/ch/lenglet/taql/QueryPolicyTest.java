@@ -1,14 +1,14 @@
 package ch.lenglet.taql;
 
 import ch.lenglet.taql.ast.Ast;
+
+import java.time.LocalDate;
 import ch.lenglet.taql.catalog.DemoCatalog;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 
@@ -39,7 +39,7 @@ class QueryPolicyTest {
     // ==================================================================
 
     private static final QueryPolicy MAY_READ_MY_CLIENTS = query -> {
-        Optional<Set<Object>> asked = clientsOf(query);
+        Optional<Set<Object>> asked = Filters.pinnedValues(query, "ClientId");
         if (asked.isEmpty()) {
             return refuse(query, "every query must name the clients it reads,"
                     + " as 'clientId = x' or 'clientId in [...]'");
@@ -57,52 +57,21 @@ class QueryPolicyTest {
     }
 
     /**
-     * The clients this query can possibly return, or empty when that cannot be
-     * known -- which the policy above reads as "refuse".
-     *
-     * Only {@code and} is walked into. A term under an {@code or} restricts
-     * nothing, because the other branch matches anyone; a negated one names what
-     * is excluded rather than what is included. Stopping at both means the worst
-     * this can do is refuse a query that would have been fine.
+     * A second rule, on a different field, to show what varies between them:
+     * the field, and what counts as acceptable. The reasoning about what a
+     * filter guarantees does not vary, and is not written in either.
      */
-    private static Optional<Set<Object>> clientsOf(Ast.Query parsed) {
-        Set<Object> found = new LinkedHashSet<>();
-        boolean pinned = collect(parsed.stmt().filter(), parsed.literals(), found);
-        return pinned ? Optional.of(found) : Optional.empty();
-    }
-
-    /** True when this branch pins clientId to the values it added. */
-    private static boolean collect(Ast.Pred pred, List<Object> literals, Set<Object> into) {
-        return switch (pred) {
-            case null -> false;
-            case Ast.And a -> {
-                boolean any = false;
-                // Every conjunct holds at once, so one that pins is enough.
-                for (Ast.Pred operand : a.operands()) any |= collect(operand, literals, into);
-                yield any;
-            }
-            case Ast.Compare c when c.op().equals("=") ->
-                    isClientId(c.left()) && add(c.right(), literals, into);
-            case Ast.InList i when !i.negated() && isClientId(i.subject()) -> {
-                for (Ast.Expr item : i.items()) {
-                    if (!add(item, literals, into)) yield false;
-                }
-                yield !i.items().isEmpty();
-            }
-            // or, not, !=, <, like, between, is null: nothing enumerable
-            default -> false;
-        };
-    }
-
-    private static boolean isClientId(Ast.Expr e) {
-        return e instanceof Ast.FieldRef f && f.name().toLowerCase(Locale.ROOT).equals("clientid");
-    }
-
-    private static boolean add(Ast.Expr value, List<Object> literals, Set<Object> into) {
-        if (!(value instanceof Ast.Lit lit) || lit.slot() < 0) return false;
-        into.add(literals.get(lit.slot()));
-        return true;
-    }
+    private static final QueryPolicy WITHIN_ONE_YEAR = query -> {
+        Optional<Filters.Range> window = Filters.range(query, "TransactionDate");
+        if (window.isEmpty()) {
+            return refuse(query, "state the dates you are reading, as 'TransactionDate in a..b'");
+        }
+        LocalDate from = LocalDate.parse((String) window.get().low());
+        LocalDate to = LocalDate.parse((String) window.get().high());
+        return from.plusYears(1).isBefore(to)
+                ? refuse(query, "a query may cover at most a year")
+                : List.of();
+    };
 
     // ==================================================================
 
@@ -121,7 +90,7 @@ class QueryPolicyTest {
     }
 
     private Optional<Set<Object>> clients(String query) {
-        return clientsOf(compiler.compile(query).parsed());
+        return Filters.pinnedValues(compiler.compile(query).parsed(), "ClientId");
     }
 
     // ==================================================================
@@ -215,6 +184,59 @@ class QueryPolicyTest {
             // confirm CH-9 exists.
             String message = refused("list { TransactionId } over { ClientId = 'CH-9' }").message();
             assertFalse(message.contains("CH-9"), message);
+        }
+    }
+
+    // ==================================================================
+    @Nested
+    @DisplayName("several rules at once")
+    class Composed {
+
+        private final QueryPolicy both = QueryPolicy.all(MAY_READ_MY_CLIENTS, WITHIN_ONE_YEAR);
+
+        private List<Diagnostic> check(String query) {
+            return both.check(compiler.compile(query).parsed());
+        }
+
+        @Test
+        void aQuerySatisfyingEveryRulePasses() {
+            assertEquals(List.of(), check("""
+                    list { TransactionId }
+                    over { ClientId = 'CH-1', TransactionDate in '2019-01-01'..'2019-06-30' }
+                    """));
+        }
+
+        @Test
+        void eachRuleSpeaksForItself() {
+            List<Diagnostic> refusals = check("""
+                    list { TransactionId }
+                    over { ClientId = 'CH-1', TransactionDate in '2010-01-01'..'2019-12-31' }
+                    """);
+            assertEquals(1, refusals.size());
+            assertTrue(refusals.getFirst().message().contains("at most a year"), refusals.toString());
+        }
+
+        @Test
+        void breakingTwoRulesReportsTwo() {
+            // The reason these return rather than throw: a caller who fixed one
+            // problem would otherwise be refused again for the next.
+            List<Diagnostic> refusals = check("list { TransactionId } over { Country = 'CH' }");
+            assertEquals(2, refusals.size(), refusals.toString());
+            assertTrue(refusals.stream().anyMatch(d -> d.message().contains("name the clients")));
+            assertTrue(refusals.stream().anyMatch(d -> d.message().contains("state the dates")));
+            assertTrue(refusals.stream().allMatch(d -> d.phase() == Diagnostic.Phase.POLICY));
+        }
+
+        @Test
+        void aRuleOnAnotherFieldIsTheSameRuleWithAnotherName() {
+            // What varies between the two policies is the field and the test;
+            // neither of them reasons about 'or' or negation, because Filters does.
+            assertTrue(WITHIN_ONE_YEAR.check(compiler.compile(
+                    "list { TransactionId } over { TransactionDate in '2019-01-01'..'2019-03-31' }")
+                    .parsed()).isEmpty());
+            assertFalse(WITHIN_ONE_YEAR.check(compiler.compile(
+                    "list { TransactionId } over { Country = 'CH' or TransactionDate in '2019-01-01'..'2019-03-31' }")
+                    .parsed()).isEmpty(), "a window under an or bounds nothing");
         }
     }
 

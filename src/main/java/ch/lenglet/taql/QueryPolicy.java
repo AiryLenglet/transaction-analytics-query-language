@@ -61,6 +61,19 @@ public interface QueryPolicy {
     QueryPolicy PERMIT_ALL = query -> List.of();
 
     /**
+     * Every rule, and every objection.
+     *
+     * A caller who broke two rules hears about both, which is the reason these
+     * return their objections instead of throwing them: the first refusal would
+     * otherwise hide the rest, and the caller would fix one thing and be
+     * refused again.
+     */
+    static QueryPolicy all(QueryPolicy... policies) {
+        List<QueryPolicy> chain = List.of(policies);
+        return query -> chain.stream().flatMap(policy -> policy.check(query).stream()).toList();
+    }
+
+    /**
      * @param query the query as written: {@code stmt()} to walk,
      *              {@code literals()} to read an {@link Ast.Lit}'s value
      * @return why this query may not run, or empty to permit it

@@ -282,9 +282,21 @@ carries a position, so it can say where. An empty list permits.
 
 The trap is that a condition only constrains a result if nothing escapes it. A
 term under an `or` constrains nothing — `ClientId = '1' or Country = 'CH'`
-returns every client's rows — and nor does a negated one. Walk `and` and stop
-at anything else, and the worst a rule can do is refuse a query that would have
-been fine.
+returns every client's rows — and nor does a negated one. That reasoning is in
+`Filters`, written and tested once, because every rule needs the same answer and
+only one of them has to be wrong:
+
+```java
+Filters.pinnedValues(query, "ClientId")   // Optional<Set<Object>> — pinned to a finite set
+Filters.range(query, "TransactionDate")   // Optional<Range>       — confined to an interval
+```
+
+Empty means *cannot tell*, which a rule must read as refuse. Rules compose, and
+each speaks for itself, so a caller breaking two hears about both:
+
+```java
+QueryPolicy.all(mustNameItsClients, withinOneYear)
+```
 
 ## Resilience
 
