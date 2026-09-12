@@ -6,6 +6,8 @@ import ch.lenglet.taql.TaqlQuery;
 import ch.lenglet.taql.catalog.DemoCatalog;
 import ch.lenglet.taql.runtime.TaqlExecutionException;
 import ch.lenglet.taql.runtime.TaqlTemplate;
+import ch.lenglet.taql.runtime.CircuitBreakingPlanRunner;
+import ch.lenglet.taql.runtime.RetryingPlanRunner;
 import ch.lenglet.taql.runtime.jdbc.JdbcPlanRunner;
 import com.zaxxer.hikari.HikariDataSource;
 import org.slf4j.Logger;
@@ -48,8 +50,13 @@ public final class Main {
         TaqlTemplate template;
         try (HikariDataSource dataSource = dataSource()) {
             initialiseSchema(dataSource);
+            // Retry absorbs a blip; the breaker stops a failure becoming a
+            // flood. Breaker outermost, so it counts requests rather than
+            // attempts -- see CircuitBreakingPlanRunner.
             template = new TaqlTemplate(new TaqlCompiler(DemoCatalog.create()),
-                    new JdbcPlanRunner(dataSource));
+                    new CircuitBreakingPlanRunner(
+                            new RetryingPlanRunner(
+                                    new JdbcPlanRunner(dataSource))));
 
             List<String> queries = loadExamples();
             for (int i = 0; i < queries.size(); i++) {

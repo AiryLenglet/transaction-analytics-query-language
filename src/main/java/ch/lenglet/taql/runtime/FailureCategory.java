@@ -43,6 +43,13 @@ public enum FailureCategory {
     /** The connection's login may not read what the query asked for. */
     PERMISSION(false, "This query is not permitted."),
 
+    /**
+     * The store was not asked, because a {@link CircuitBreakingPlanRunner} is
+     * refusing to send anything for the moment. Never retried: the point of the
+     * breaker is to stop trying.
+     */
+    UNAVAILABLE(false, "The database is not accepting queries at the moment."),
+
     /** Unrecognised. Treat as a server fault and look at the logs. */
     UNKNOWN(false, "The query could not be completed.");
 
@@ -57,6 +64,25 @@ public enum FailureCategory {
     /** True if the same query, run again, might succeed. */
     public boolean worthRetrying() {
         return worthRetrying;
+    }
+
+    /**
+     * True when this says something about the store rather than about the query
+     * that hit it -- which is what a circuit breaker may act on.
+     *
+     * The distinction matters because a breaker sheds traffic for
+     * <em>everyone</em>. A malformed value, a column the catalog has and the
+     * database does not, a login without rights: all of these fail every time
+     * and none of them means the store is unwell, so letting one caller's bad
+     * query open the breaker would turn their mistake into an outage.
+     *
+     * {@link #TIMEOUT} is excluded for the same reason. A query can be slow on a
+     * perfectly healthy server, and one expensive query must not stop everybody
+     * else's. {@link #UNKNOWN} is excluded because acting on a failure we cannot
+     * name is the same gamble as retrying one.
+     */
+    public boolean reflectsStoreHealth() {
+        return this == RETRYABLE || this == RESOURCE;
     }
 
     /**

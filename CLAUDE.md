@@ -122,7 +122,7 @@ The resolver **collects** diagnostics rather than failing on the first, then thr
 
 ## Runtime error handling
 
-`FailureCategory` is the neutral vocabulary (RETRYABLE / RESOURCE / TIMEOUT / INVALID_DATA / SCHEMA_MISMATCH / PERMISSION); `jdbc.SqlFailure.classify` maps `SQLException` onto it. A deadlock and a permission refusal are facts about running a query anywhere — only the codes that identify them are dialect-specific, which is why retrying lives in `TaqlTemplate` and classifying lives in the runner. Three rules that the codes in `README.md` were derived from empirically:
+Retrying and circuit breaking are `PlanRunner` decorators (`RetryingPlanRunner`, `CircuitBreakingPlanRunner`), composed by the deployment rather than configured on the template — breaker outermost, so it counts requests rather than attempts. Only `reflectsStoreHealth()` categories open it, because a breaker sheds everyone's traffic and one caller's bad query must not be able to. `FailureCategory` is the neutral vocabulary (RETRYABLE / RESOURCE / TIMEOUT / INVALID_DATA / SCHEMA_MISMATCH / PERMISSION); `jdbc.SqlFailure.classify` maps `SQLException` onto it. A deadlock and a permission refusal are facts about running a query anywhere — only the codes that identify them are dialect-specific, which is why retrying lives in `TaqlTemplate` and classifying lives in the runner. Three rules that the codes in `README.md` were derived from empirically:
 
 - **Never branch on exception subclass** — mssql-jdbc throws plain `SQLServerException` for essentially everything.
 - **Never match on message text** — server messages are localised.

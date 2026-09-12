@@ -68,15 +68,13 @@ class TaqlTemplateTest {
         var counted = countingSource(3, connections);
         QueryPolicy refuseEverything =
                 parsed -> List.of(new Diagnostic(Diagnostic.Phase.POLICY, 1, 1, "no"));
-        var template = new TaqlTemplate(compiler, new JdbcPlanRunner(counted),
-                refuseEverything, TaqlTemplate.Options.DEFAULTS);
+        var template = new TaqlTemplate(compiler, new JdbcPlanRunner(counted), refuseEverything);
 
         assertThrows(TaqlException.class, () -> template.execute(QUERY));
         assertEquals(0, connections[0], "the policy must refuse before a connection is opened");
 
         // ...and a permitting policy still runs the query.
-        var permitted = new TaqlTemplate(compiler, new JdbcPlanRunner(counted),
-                QueryPolicy.PERMIT_ALL, TaqlTemplate.Options.DEFAULTS);
+        var permitted = new TaqlTemplate(compiler, new JdbcPlanRunner(counted), QueryPolicy.PERMIT_ALL);
         assertEquals(3, permitted.execute(QUERY).size());
         assertEquals(1, connections[0]);
     }

@@ -285,6 +285,35 @@ returns every client's rows — and nor does a negated one. Walk `and` and stop
 at anything else, and the worst a rule can do is refuse a query that would have
 been fine.
 
+## Resilience
+
+Retrying and circuit breaking are `PlanRunner`s that wrap another one, so a
+deployment composes what it wants:
+
+```java
+new TaqlTemplate(compiler,
+        new CircuitBreakingPlanRunner(
+                new RetryingPlanRunner(
+                        new JdbcPlanRunner(dataSource))));
+```
+
+**Retrying is safe here in a way it usually is not**: every TAQL query is a
+`SELECT`, so running one twice is indistinguishable from running it once. That
+is the licence for doing it in the library rather than leaving it to a caller,
+who would have to know that about TAQL to know it was allowed. A `TIMEOUT` is
+never retried — the same query takes just as long again.
+
+**The breaker goes outside the retry**, so it counts one failure per *request*
+rather than per attempt. A single deadlock never reaches it, because the retry
+absorbs it; a request that deadlocked every time really is a sign of trouble.
+Once open, the whole request is refused, so nothing retries into a store that
+is not answering.
+
+It only counts failures that say something about the *store* —
+`FailureCategory.reflectsStoreHealth()`. A breaker sheds traffic for everyone,
+so one caller's malformed value, missing permission, or slow query must not be
+able to open it.
+
 ## Limits
 
 Bounds a deployment sets, none of them part of the language:
@@ -295,6 +324,8 @@ Bounds a deployment sets, none of them part of the language:
 | nesting depth | 256 levels | `TaqlParser.Limits`, enforced as the AST is built |
 | rows returned | 10 000 | `JdbcPlanRunner.Options` |
 | statement timeout | 30 s | `JdbcPlanRunner.Options` |
+| retry attempts | 3, jittered backoff | `RetryingPlanRunner.Options` |
+| circuit opens after | 5 consecutive store failures, for 10 s | `CircuitBreakingPlanRunner.Options` |
 
 Exceeding one is a `limit` diagnostic, positioned like any other. The nesting
 bound is what protects the stack: the resolver, the printer and the SQL
@@ -321,8 +352,6 @@ Deliberate omissions for a POC, roughly in the order I would add them:
   caller still has to name the clients. Forcing a predicate in — so a query that
   names none is scoped rather than refused — is the other half, and needs the
   set of clients a caller may read to be enumerable.
-- **Circuit breaking.** Retries are bounded per request but nothing sheds load
-  when the database is failing for everyone at once.
 - **Cost control.** `JdbcPlanRunner` caps rows and every statement is bounded by
   a timeout, but nothing stops `count(distinct x)` over an unfiltered table
   before it runs; a required-filter rule per entity, and a cost estimate from

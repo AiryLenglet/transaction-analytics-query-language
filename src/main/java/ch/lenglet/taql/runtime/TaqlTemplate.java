@@ -11,7 +11,6 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Compiles and runs TAQL queries.
@@ -23,12 +22,18 @@ import java.util.concurrent.ThreadLocalRandom;
  * wherever a query runs: bind, attempt, decide whether a failure is worth
  * another go.
  *
- * <h2>Retrying is policy, not dialect</h2>
- * Every TAQL query is a {@code SELECT}, so re-running one is side-effect free --
- * which makes a deadlock victim or a dropped connection genuinely safe to retry.
- * A timeout is not: the same query will take just as long again. That reasoning
- * holds for any store, so it lives here, reading the {@link FailureCategory} a
- * runner attached rather than any exception type of its own.
+ * <h2>What it does not do</h2>
+ * Retry, or shed load. Both are {@link PlanRunner}s that wrap another one, so
+ * how much of either a deployment wants is something it composes:
+ *
+ * <pre>{@code
+ * new TaqlTemplate(compiler,
+ *         new CircuitBreakingPlanRunner(
+ *                 new RetryingPlanRunner(
+ *                         new JdbcPlanRunner(dataSource))));
+ * }</pre>
+ *
+ * The order is deliberate; see {@link CircuitBreakingPlanRunner}.
  */
 public final class TaqlTemplate {
 
@@ -39,43 +44,26 @@ public final class TaqlTemplate {
      */
     private static final Logger log = LoggerFactory.getLogger(TaqlTemplate.class);
 
-    /**
-     * @param maxAttempts        total attempts for a retryable failure.
-     * @param retryBackoffMillis base delay, doubled per attempt and jittered.
-     */
-    public record Options(int maxAttempts, long retryBackoffMillis) {
-
-        public static final Options DEFAULTS = new Options(3, 50);
-
-        public Options {
-            if (maxAttempts < 1) throw new IllegalArgumentException("maxAttempts must be at least 1");
-            if (retryBackoffMillis < 0) throw new IllegalArgumentException("retryBackoffMillis cannot be negative");
-        }
-    }
-
     private final TaqlCompiler compiler;
     private final PlanRunner runner;
     private final QueryPolicy policy;
-    private final Options options;
 
     public TaqlTemplate(TaqlCompiler compiler, PlanRunner runner) {
-        this(compiler, runner, QueryPolicy.PERMIT_ALL, Options.DEFAULTS);
-    }
-
-    public TaqlTemplate(TaqlCompiler compiler, PlanRunner runner, Options options) {
-        this(compiler, runner, QueryPolicy.PERMIT_ALL, options);
+        this(compiler, runner, QueryPolicy.PERMIT_ALL);
     }
 
     /**
-     * @param policy consulted for every query, after binding and before the store
-     *               is touched. {@link QueryPolicy#PERMIT_ALL} is the default, so
-     *               a deployment that wants a rule has to say so.
+     * @param runner where a compiled plan goes. Retrying and circuit breaking
+     *               are {@link PlanRunner}s that wrap another, so a deployment
+     *               composes what it wants rather than configuring it here.
+     * @param policy consulted for every query, before the store is touched.
+     *               {@link QueryPolicy#PERMIT_ALL} is the default, so a
+     *               deployment that wants a rule has to say so.
      */
-    public TaqlTemplate(TaqlCompiler compiler, PlanRunner runner, QueryPolicy policy, Options options) {
+    public TaqlTemplate(TaqlCompiler compiler, PlanRunner runner, QueryPolicy policy) {
         this.compiler = compiler;
         this.runner = runner;
         this.policy = policy;
-        this.options = options;
     }
 
     /**
@@ -103,48 +91,6 @@ public final class TaqlTemplate {
         if (!refusals.isEmpty()) throw new TaqlException(refusals);
 
         List<Object> values = compiled.bind();
-
-        for (int attempt = 1; ; attempt++) {
-            try {
-                return runner.run(plan, values);
-            } catch (TaqlExecutionException e) {
-                if (!e.failure().worthRetrying() || attempt == options.maxAttempts()) {
-                    // Re-thrown so the attempt count reflects the whole call; a
-                    // runner only ever knows about the one attempt it made.
-                    TaqlExecutionException giveUp =
-                            new TaqlExecutionException(e.failure(), e.code(), e.getCause(), attempt);
-                    log.error("query failed: {}", giveUp.logDetail());
-                    throw giveUp;
-                }
-                log.warn("attempt {} of {} failed as {} (code {}); retrying",
-                        attempt, options.maxAttempts(), e.failure(), e.code());
-                backoff(attempt, e);
-            }
-        }
-    }
-
-    /**
-     * Exponential backoff, jittered.
-     *
-     * Without the jitter this is synchronised retry: every caller that lost the
-     * same deadlock, or that was holding a connection when the store went away,
-     * sleeps exactly the same doubling interval and collides again on each
-     * wake-up. Spreading them is most of the value of backing off at all.
-     *
-     * Half the interval is fixed and half is random, so there is still a floor
-     * under the wait -- full jitter can pick a delay near zero and retry into a
-     * server that has not recovered.
-     */
-    private void backoff(int attempt, TaqlExecutionException cause) {
-        // Shift capped so a generous maxAttempts cannot overflow into a
-        // negative delay, which Thread.sleep rejects.
-        long ceiling = options.retryBackoffMillis() << Math.min(attempt - 1, 16);
-        long delay = ceiling / 2 + ThreadLocalRandom.current().nextLong(ceiling / 2 + 1);
-        try {
-            Thread.sleep(delay);
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            throw cause;
-        }
+        return runner.run(plan, values);
     }
 }
