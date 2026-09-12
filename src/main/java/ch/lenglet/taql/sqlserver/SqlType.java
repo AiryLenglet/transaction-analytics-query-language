@@ -1,7 +1,6 @@
-package ch.lenglet.taql.sql;
+package ch.lenglet.taql.sqlserver;
 
-import ch.lenglet.taql.PhysicalType;
-import ch.lenglet.taql.TaqlType;
+import ch.lenglet.taql.spi.PhysicalType;
 
 import java.sql.Types;
 

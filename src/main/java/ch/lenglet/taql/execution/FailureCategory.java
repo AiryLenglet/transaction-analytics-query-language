@@ -1,4 +1,5 @@
-package ch.lenglet.taql.runtime;
+package ch.lenglet.taql.execution;
+
 
 /**
  * What a failed execution means, and what the caller should do about it.

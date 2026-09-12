@@ -1,4 +1,4 @@
-package ch.lenglet.taql;
+package ch.lenglet.taql.policy;
 
 import ch.lenglet.taql.ast.Ast;
 

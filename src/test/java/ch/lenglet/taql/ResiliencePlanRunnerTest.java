@@ -1,24 +1,23 @@
 package ch.lenglet.taql;
 
-import ch.lenglet.taql.plan.Plan;
-import ch.lenglet.taql.runtime.CircuitBreakingPlanRunner;
-import ch.lenglet.taql.runtime.FailureCategory;
-import ch.lenglet.taql.runtime.PlanRunner;
-import ch.lenglet.taql.runtime.RetryingPlanRunner;
-import ch.lenglet.taql.runtime.TaqlExecutionException;
+import ch.lenglet.taql.execution.CircuitBreakingPlanRunner;
+import ch.lenglet.taql.execution.FailureCategory;
+import ch.lenglet.taql.execution.RetryingPlanRunner;
+import ch.lenglet.taql.execution.TaqlExecutionException;
+import ch.lenglet.taql.spi.PlanRunner;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Retrying and circuit breaking, which are the code that only runs when

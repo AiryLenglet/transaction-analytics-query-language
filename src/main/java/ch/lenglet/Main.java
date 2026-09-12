@@ -3,12 +3,13 @@ package ch.lenglet;
 import ch.lenglet.taql.TaqlCompiler;
 import ch.lenglet.taql.TaqlException;
 import ch.lenglet.taql.TaqlQuery;
+import ch.lenglet.taql.TaqlTemplate;
 import ch.lenglet.taql.catalog.DemoCatalog;
-import ch.lenglet.taql.runtime.TaqlExecutionException;
-import ch.lenglet.taql.runtime.TaqlTemplate;
-import ch.lenglet.taql.runtime.CircuitBreakingPlanRunner;
-import ch.lenglet.taql.runtime.RetryingPlanRunner;
-import ch.lenglet.taql.runtime.jdbc.JdbcPlanRunner;
+import ch.lenglet.taql.execution.CircuitBreakingPlanRunner;
+import ch.lenglet.taql.execution.RetryingPlanRunner;
+import ch.lenglet.taql.execution.TaqlExecutionException;
+import ch.lenglet.taql.sqlserver.JdbcPlanRunner;
+
 import com.zaxxer.hikari.HikariDataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

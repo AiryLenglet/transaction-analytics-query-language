@@ -1,7 +1,6 @@
-package ch.lenglet.taql.plan;
+package ch.lenglet.taql;
 
-import ch.lenglet.taql.PhysicalType;
-import ch.lenglet.taql.TaqlType;
+import ch.lenglet.taql.spi.PhysicalType;
 
 import java.util.List;
 

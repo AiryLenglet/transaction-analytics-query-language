@@ -5,11 +5,11 @@ import ch.lenglet.taql.ast.TaqlParser;
 import ch.lenglet.taql.cache.LruPlanCache;
 import ch.lenglet.taql.cache.PlanCache;
 import ch.lenglet.taql.catalog.Catalog;
-import ch.lenglet.taql.plan.Plan;
-import ch.lenglet.taql.runtime.jdbc.Binder;
-import ch.lenglet.taql.sem.Resolver;
-import ch.lenglet.taql.sem.Resolved;
-import ch.lenglet.taql.sql.SqlServerGenerator;
+import ch.lenglet.taql.resolve.Resolved;
+import ch.lenglet.taql.resolve.Resolver;
+import ch.lenglet.taql.spi.QueryTranslator;
+import ch.lenglet.taql.sqlserver.SqlServerGenerator;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

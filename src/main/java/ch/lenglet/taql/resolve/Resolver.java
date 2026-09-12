@@ -1,12 +1,12 @@
-package ch.lenglet.taql.sem;
+package ch.lenglet.taql.resolve;
 
-import ch.lenglet.taql.QueryTranslator;
 import ch.lenglet.taql.Diagnostic;
 import ch.lenglet.taql.TaqlException;
-import ch.lenglet.taql.PhysicalType;
 import ch.lenglet.taql.TaqlType;
 import ch.lenglet.taql.ast.Ast;
 import ch.lenglet.taql.catalog.Catalog;
+import ch.lenglet.taql.spi.PhysicalType;
+import ch.lenglet.taql.spi.QueryTranslator;
 
 import java.util.ArrayList;
 import java.util.Collections;

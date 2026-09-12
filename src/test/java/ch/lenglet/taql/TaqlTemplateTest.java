@@ -1,13 +1,15 @@
 package ch.lenglet.taql;
 
 import ch.lenglet.taql.catalog.DemoCatalog;
-import ch.lenglet.taql.runtime.TaqlTemplate;
-import ch.lenglet.taql.runtime.jdbc.JdbcPlanRunner;
-import ch.lenglet.taql.runtime.jdbc.JdbcPlanRunner;
+import ch.lenglet.taql.policy.QueryPolicy;
+import ch.lenglet.taql.sqlserver.JdbcPlanRunner;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import javax.sql.DataSource;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -16,10 +18,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.List;
 import java.util.Map;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import javax.sql.DataSource;
 
 /**
  * The row ceiling, exercised against a stub driver.

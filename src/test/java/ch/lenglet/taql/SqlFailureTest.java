@@ -1,18 +1,18 @@
 package ch.lenglet.taql;
 
-import ch.lenglet.taql.runtime.FailureCategory;
-import ch.lenglet.taql.runtime.jdbc.SqlFailure;
-import ch.lenglet.taql.runtime.TaqlExecutionException;
+import ch.lenglet.taql.execution.FailureCategory;
+import ch.lenglet.taql.execution.TaqlExecutionException;
+import ch.lenglet.taql.sqlserver.SqlFailure;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-
-import java.sql.SQLException;
-import java.sql.SQLTimeoutException;
-
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.sql.SQLException;
+import java.sql.SQLTimeoutException;
 
 /**
  * The codes and SQL states asserted here were observed against SQL Server 2019

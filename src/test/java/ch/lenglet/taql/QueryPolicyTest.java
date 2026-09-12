@@ -1,22 +1,23 @@
 package ch.lenglet.taql;
 
 import ch.lenglet.taql.ast.Ast;
-
-import java.time.LocalDate;
 import ch.lenglet.taql.catalog.DemoCatalog;
+import ch.lenglet.taql.policy.Filters;
+import ch.lenglet.taql.policy.QueryPolicy;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  * A policy authorising the clients a query asks about, written the way one

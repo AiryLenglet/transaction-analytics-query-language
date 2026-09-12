@@ -1,11 +1,8 @@
-package ch.lenglet.taql.runtime;
+package ch.lenglet.taql;
 
-import ch.lenglet.taql.Diagnostic;
-import ch.lenglet.taql.QueryPolicy;
-import ch.lenglet.taql.TaqlCompiler;
-import ch.lenglet.taql.TaqlException;
-import ch.lenglet.taql.TaqlQuery;
-import ch.lenglet.taql.plan.Plan;
+import ch.lenglet.taql.policy.QueryPolicy;
+import ch.lenglet.taql.spi.PlanRunner;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,7 +14,7 @@ import java.util.Map;
  *
  * Named for {@code JdbcTemplate}, and for the same reason: it is the thing you
  * hold. It knows nothing about any store, though -- compiling belongs to
- * {@link TaqlCompiler} and a {@link ch.lenglet.taql.QueryTranslator}, running belongs to
+ * {@link TaqlCompiler} and a {@link ch.lenglet.taql.spi.QueryTranslator}, running belongs to
  * a {@link PlanRunner}, and what is left here is the part that is the same
  * wherever a query runs: bind, attempt, decide whether a failure is worth
  * another go.

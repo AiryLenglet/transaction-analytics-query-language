@@ -1,7 +1,7 @@
 package ch.lenglet.taql.catalog;
 
-import ch.lenglet.taql.PhysicalType;
 import ch.lenglet.taql.TaqlType;
+import ch.lenglet.taql.spi.PhysicalType;
 
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;

@@ -1,25 +1,20 @@
-package ch.lenglet.taql.runtime.jdbc;
+package ch.lenglet.taql;
 
-import ch.lenglet.taql.Diagnostic;
-import ch.lenglet.taql.TaqlException;
-import ch.lenglet.taql.sql.SqlType;
-import ch.lenglet.taql.TaqlType;
-import ch.lenglet.taql.plan.Plan;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
-import java.sql.Types;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 /**
- * Turns a plan's parameter recipe plus a set of values into JDBC bindings.
+ * Turns a plan's parameter recipe into the values its placeholders stand for.
+ *
+ * Nothing here knows how a value is sent, only what it must be: the physical
+ * type says {@code varchar(1)} and this produces a {@code String}, leaving the
+ * driver to decide what that means on the wire.
  *
  * <h2>The plan's types are a contract, and this is where it is enforced</h2>
  * {@link Plan#variables()} publishes what each {@code $variable} must be, so a
@@ -61,55 +56,6 @@ public final class Binder {
             });
         }
         return out;
-    }
-
-    public static void apply(PreparedStatement statement, Plan plan, List<Object> values) throws SQLException {
-        for (int i = 0; i < values.size(); i++) {
-            Plan.ParamSlot slot = plan.parameters().get(i);
-            Object value = values.get(i);
-            int index = i + 1;
-            if (value == null) {
-                // The physical type, not the DSL type, is what the server expects.
-                statement.setNull(index, sqlType(slot).jdbcType());
-                continue;
-            }
-            switch (value) {
-                // Sending a varchar column an NVARCHAR parameter makes SQL Server
-                // convert the column rather than seek on it, so the decision is
-                // made per parameter from its own type rather than by a
-                // connection-wide sendStringParametersAsUnicode switch.
-                case String s -> {
-                    if (sqlType(slot).unicode()) statement.setNString(index, s);
-                    else statement.setString(index, s);
-                }
-                case Long l -> statement.setLong(index, l);
-                case Integer n -> statement.setInt(index, n);
-                case BigDecimal d -> statement.setBigDecimal(index, d);
-                case Boolean b -> statement.setBoolean(index, b);
-                case LocalDate d -> statement.setObject(index, d, Types.DATE);
-                case LocalDateTime d -> statement.setObject(index, d, Types.TIMESTAMP);
-                default -> statement.setObject(index, value);
-            }
-        }
-    }
-
-    /**
-     * This binder speaks JDBC, so it needs a T-SQL type. A plan built by another
-     * backend's generator would carry that backend's types and has no business
-     * reaching here -- an internal fault, not something a caller can provoke.
-     */
-    private static SqlType sqlType(Plan.ParamSlot slot) {
-        if (slot.physicalType() instanceof SqlType sql) return sql;
-        throw new IllegalStateException("the JDBC binder needs a SQL type, got "
-                + slot.physicalType().describe());
-    }
-
-    private static Object require(Map<String, Object> variables, String name) {
-        if (!variables.containsKey(name)) {
-            throw new TaqlException(new Diagnostic(Diagnostic.Phase.TYPE, 0, 0,
-                    "missing value for query variable $" + name));
-        }
-        return variables.get(name);
     }
 
     /**

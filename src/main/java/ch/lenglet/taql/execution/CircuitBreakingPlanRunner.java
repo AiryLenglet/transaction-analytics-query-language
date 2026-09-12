@@ -1,6 +1,8 @@
-package ch.lenglet.taql.runtime;
+package ch.lenglet.taql.execution;
 
-import ch.lenglet.taql.plan.Plan;
+import ch.lenglet.taql.Plan;
+import ch.lenglet.taql.spi.PlanRunner;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

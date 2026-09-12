@@ -1,4 +1,4 @@
-package ch.lenglet.taql.sem;
+package ch.lenglet.taql.resolve;
 
 import ch.lenglet.taql.TaqlType;
 

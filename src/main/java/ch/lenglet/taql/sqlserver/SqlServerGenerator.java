@@ -1,11 +1,11 @@
-package ch.lenglet.taql.sql;
+package ch.lenglet.taql.sqlserver;
 
-import ch.lenglet.taql.QueryTranslator;
-import ch.lenglet.taql.PhysicalType;
+import ch.lenglet.taql.Plan;
 import ch.lenglet.taql.TaqlType;
 import ch.lenglet.taql.catalog.Catalog;
-import ch.lenglet.taql.plan.Plan;
-import ch.lenglet.taql.sem.Resolved;
+import ch.lenglet.taql.resolve.Resolved;
+import ch.lenglet.taql.spi.PhysicalType;
+import ch.lenglet.taql.spi.QueryTranslator;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

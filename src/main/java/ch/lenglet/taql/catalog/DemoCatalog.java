@@ -1,7 +1,7 @@
 package ch.lenglet.taql.catalog;
 
-import ch.lenglet.taql.sql.SqlType;
 import ch.lenglet.taql.TaqlType;
+import ch.lenglet.taql.sqlserver.SqlType;
 
 import java.util.List;
 import java.util.Map;

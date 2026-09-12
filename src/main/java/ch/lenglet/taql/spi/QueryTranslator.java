@@ -1,7 +1,8 @@
-package ch.lenglet.taql;
+package ch.lenglet.taql.spi;
 
-import ch.lenglet.taql.plan.Plan;
-import ch.lenglet.taql.sem.Resolved;
+import ch.lenglet.taql.Plan;
+import ch.lenglet.taql.TaqlType;
+import ch.lenglet.taql.resolve.Resolved;
 
 /**
  * Turns a resolved query into a statement in some target query language.
@@ -22,7 +23,7 @@ import ch.lenglet.taql.sem.Resolved;
  *
  * <h2>Translating, not running</h2>
  * Nothing here touches a store: no connection, no driver, no error taxonomy.
- * That is {@link ch.lenglet.taql.runtime.PlanRunner}, and the two are separate
+ * That is {@link ch.lenglet.taql.spi.PlanRunner}, and the two are separate
  * because a translator is pure and shareable while a runner holds resources.
  * Bundling them would make a compiler depend on a live connection, which is
  * exactly what a validation endpoint must not need.

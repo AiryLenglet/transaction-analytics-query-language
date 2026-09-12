@@ -1,5 +1,6 @@
 package ch.lenglet.taql.ast;
 
+
 import java.util.List;
 import java.util.StringJoiner;
 
@@ -12,7 +13,7 @@ import java.util.StringJoiner;
  * generated SQL -- field names, operators, list arity -- is preserved.
  *
  * <h2>Why the slot index is in the key</h2>
- * A cached plan's {@link ch.lenglet.taql.plan.Plan.Auto} slots index into the
+ * A cached plan's {@link ch.lenglet.taql.Plan.Auto} slots index into the
  * literal table of whichever query is <em>currently running</em>, so two texts
  * may share a plan only if they number their literals identically. That holds
  * because {@link AstBuilder} allocates slots in this same canonical order --

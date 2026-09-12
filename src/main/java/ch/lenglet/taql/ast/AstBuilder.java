@@ -3,6 +3,7 @@ package ch.lenglet.taql.ast;
 import ch.lenglet.taql.Diagnostic;
 import ch.lenglet.taql.TaqlException;
 import ch.lenglet.taql.grammar.TaqlParser;
+
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.tree.TerminalNode;
@@ -139,7 +140,7 @@ public final class AstBuilder {
      *
      * <h2>Why they are collected rather than built</h2>
      * Building is what allocates literal slots, and <b>slot order has to be
-     * canonical</b>: {@link ch.lenglet.taql.plan.Plan.Auto} indexes the literal
+     * canonical</b>: {@link ch.lenglet.taql.Plan.Auto} indexes the literal
      * table of whichever query is running, so two texts sharing a cached plan
      * must number their literals identically. Ordering is enforced above, which
      * makes that hold anyway -- collecting here and building in

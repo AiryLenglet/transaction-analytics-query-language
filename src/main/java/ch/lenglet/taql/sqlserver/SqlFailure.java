@@ -1,6 +1,6 @@
-package ch.lenglet.taql.runtime.jdbc;
+package ch.lenglet.taql.sqlserver;
 
-import ch.lenglet.taql.runtime.FailureCategory;
+import ch.lenglet.taql.execution.FailureCategory;
 
 import java.sql.SQLException;
 import java.util.Set;

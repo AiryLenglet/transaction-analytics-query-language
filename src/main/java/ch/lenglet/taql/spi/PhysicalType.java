@@ -1,4 +1,5 @@
-package ch.lenglet.taql;
+package ch.lenglet.taql.spi;
+
 
 /**
  * A value's type in whatever store the query will run against.

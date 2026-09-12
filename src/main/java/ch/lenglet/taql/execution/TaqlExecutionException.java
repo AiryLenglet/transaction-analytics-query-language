@@ -1,4 +1,4 @@
-package ch.lenglet.taql.runtime;
+package ch.lenglet.taql.execution;
 
 /**
  * A failure while running a compiled plan, classified and stripped of anything

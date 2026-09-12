@@ -1,8 +1,8 @@
-package ch.lenglet.taql.sem;
+package ch.lenglet.taql.resolve;
 
-import ch.lenglet.taql.PhysicalType;
 import ch.lenglet.taql.TaqlType;
 import ch.lenglet.taql.catalog.Catalog;
+import ch.lenglet.taql.spi.PhysicalType;
 
 import java.util.List;
 import java.util.Set;

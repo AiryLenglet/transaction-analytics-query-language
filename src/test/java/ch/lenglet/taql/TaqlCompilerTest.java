@@ -4,16 +4,12 @@ import ch.lenglet.taql.ast.TaqlParser;
 import ch.lenglet.taql.cache.PlanCache;
 import ch.lenglet.taql.catalog.Catalog;
 import ch.lenglet.taql.catalog.DemoCatalog;
-import ch.lenglet.taql.sql.SqlType;
-import ch.lenglet.taql.plan.Plan;
-import ch.lenglet.taql.sem.Resolver;
+import ch.lenglet.taql.resolve.Resolver;
+import ch.lenglet.taql.sqlserver.SqlType;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-
-import java.util.List;
-import java.util.Map;
-
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -21,6 +17,9 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.List;
+import java.util.Map;
 
 class TaqlCompilerTest {
 
@@ -442,7 +441,7 @@ class TaqlCompilerTest {
             // The point of the parser being an object: these are a deployment's
             // call, and while parsing was static they were not reachable at all.
             TaqlCompiler strict = new TaqlCompiler(DemoCatalog.create(),
-                    new ch.lenglet.taql.sql.SqlServerGenerator(),
+                    new ch.lenglet.taql.sqlserver.SqlServerGenerator(),
                     new TaqlParser(new TaqlParser.Limits(64, 128, 4)),
                     Resolver.Options.DEFAULTS,
                     new ch.lenglet.taql.cache.LruPlanCache<>(16));
@@ -665,7 +664,7 @@ class TaqlCompilerTest {
             Catalog catalog = new Catalog(Map.of("t", new Catalog.Entity("t",
                     new Catalog.Table("dbo", "Transactions"), List.of(),
                     List.of(Catalog.Field.of(field, TaqlType.STRING, column, new SqlType.VarChar(50))))));
-            return new TaqlCompiler(catalog, new ch.lenglet.taql.sql.SqlServerGenerator(),
+            return new TaqlCompiler(catalog, new ch.lenglet.taql.sqlserver.SqlServerGenerator(),
                     new TaqlParser(), Resolver.Options.DEFAULTS, cache);
         }
 
@@ -676,7 +675,7 @@ class TaqlCompilerTest {
             // Worth pinning, because the one serious bug this codebase had was a
             // cache handing one query another query's values.
             TaqlCompiler uncached = new TaqlCompiler(DemoCatalog.create(),
-                    new ch.lenglet.taql.sql.SqlServerGenerator(),
+                    new ch.lenglet.taql.sqlserver.SqlServerGenerator(),
                     new ch.lenglet.taql.ast.TaqlParser(), Resolver.Options.DEFAULTS,
                     new NeverCaches<>());
 

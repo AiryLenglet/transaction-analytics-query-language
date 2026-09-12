@@ -1,15 +1,16 @@
 package ch.lenglet.taql;
 
 import ch.lenglet.taql.catalog.DemoCatalog;
+import ch.lenglet.taql.policy.Filters;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Set;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * What a filter guarantees.

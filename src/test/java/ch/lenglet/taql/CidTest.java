@@ -3,16 +3,16 @@ package ch.lenglet.taql;
 import ch.lenglet.taql.ast.Ast;
 import ch.lenglet.taql.ast.TaqlParser;
 import ch.lenglet.taql.catalog.DemoCatalog;
-import ch.lenglet.taql.runtime.jdbc.SqlFailure;
-import ch.lenglet.taql.runtime.TaqlExecutionException;
+import ch.lenglet.taql.execution.TaqlExecutionException;
+import ch.lenglet.taql.sqlserver.SqlFailure;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.SQLException;
 import java.util.Map;
-
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Client-identifying data must not be reachable by accident.

@@ -1,5 +1,6 @@
-package ch.lenglet.taql;
+package ch.lenglet.taql.policy;
 
+import ch.lenglet.taql.Diagnostic;
 import ch.lenglet.taql.ast.Ast;
 
 import java.util.List;
@@ -38,7 +39,7 @@ import java.util.List;
  * Return the reasons rather than throwing them. A refusal is an ordinary
  * outcome, not an exception, and returning lets several be reported at once --
  * the same reason {@code Resolver} accumulates through {@code error()} instead
- * of failing on the first problem. {@link ch.lenglet.taql.runtime.TaqlTemplate}
+ * of failing on the first problem. {@link ch.lenglet.taql.TaqlTemplate}
  * turns a non-empty result into one {@link TaqlException}, so a refusal reaches
  * the caller as a 400 carrying diagnostics, like every other rejection.
  *

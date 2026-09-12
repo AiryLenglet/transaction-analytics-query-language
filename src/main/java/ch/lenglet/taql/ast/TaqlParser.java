@@ -3,6 +3,8 @@ package ch.lenglet.taql.ast;
 import ch.lenglet.taql.Diagnostic;
 import ch.lenglet.taql.TaqlException;
 import ch.lenglet.taql.grammar.TaqlLexer;
+
+import org.antlr.v4.runtime.BailErrorStrategy;
 import org.antlr.v4.runtime.BaseErrorListener;
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
@@ -10,7 +12,6 @@ import org.antlr.v4.runtime.DefaultErrorStrategy;
 import org.antlr.v4.runtime.RecognitionException;
 import org.antlr.v4.runtime.Recognizer;
 import org.antlr.v4.runtime.atn.PredictionMode;
-import org.antlr.v4.runtime.BailErrorStrategy;
 import org.antlr.v4.runtime.misc.ParseCancellationException;
 
 import java.util.ArrayList;
