@@ -326,7 +326,7 @@ class TaqlCompilerTest {
             // Off by default so the SQL mirrors the TAQL; a deployment that does
             // not want unbounded results opts in here.
             TaqlCompiler capped = new TaqlCompiler(DemoCatalog.create(),
-                    new Resolver.Options(1000), 16, 16);
+                    new Resolver.Options(1000), 16);
             Plan plan = capped.compileUncached("list { transactionId }");
             assertTrue(plan.statement().startsWith("SELECT TOP (?)"));
             assertEquals(1000L, ((Plan.Constant) plan.parameters().getFirst()).value());
@@ -445,7 +445,6 @@ class TaqlCompilerTest {
                     new ch.lenglet.taql.sql.SqlServerGenerator(),
                     new TaqlParser(new TaqlParser.Limits(64, 4)),
                     Resolver.Options.DEFAULTS,
-                    new ch.lenglet.taql.cache.LruPlanCache<>(16),
                     new ch.lenglet.taql.cache.LruPlanCache<>(16));
 
             // Comfortably legal by default, too long here.
@@ -484,7 +483,7 @@ class TaqlCompilerTest {
             assertAll(
                     () -> assertSame(a, b, "same shape must reuse the same Plan instance"),
                     () -> assertEquals(a.shapeKey(), b.shapeKey()),
-                    () -> assertEquals(1, compiler.shapeCache().stats().size()));
+                    () -> assertEquals(1, compiler.plans().stats().size()));
         }
 
         @Test
@@ -537,18 +536,21 @@ class TaqlCompilerTest {
                     }
                     over {   clientId  =  '1'   }
                     """);
-            assertEquals(1, compiler.shapeCache().stats().size());
-            assertEquals(2, compiler.textCache().stats().size());
+            assertEquals(1, compiler.plans().stats().size());
         }
 
         @Test
-        void identicalTextSkipsParsingEntirely() {
+        void aRepeatedQueryStillParsesAndStillReusesItsPlan() {
+            // There is no cache on the text: parsing is the cheap phase, and a
+            // cache keyed on it would hold the caller's constants to almost no
+            // purpose -- constants are what change between two calls.
             String source = "list { transactionId } over { clientId = '1' }";
-            compiler.compile(source);
-            long missesBefore = compiler.textCache().stats().misses();
-            compiler.compile(source);
-            assertEquals(missesBefore, compiler.textCache().stats().misses());
-            assertEquals(1, compiler.textCache().stats().hits());
+            var first = compiler.compile(source);
+            var second = compiler.compile(source);
+
+            assertNotSame(first, second, "nothing caches the compiled query itself");
+            assertSame(first.plan(), second.plan(), "but the plan is reused");
+            assertEquals(1, compiler.plans().stats().hits());
         }
 
         @Test
@@ -608,7 +610,7 @@ class TaqlCompilerTest {
             TaqlCompiler uncached = new TaqlCompiler(DemoCatalog.create(),
                     new ch.lenglet.taql.sql.SqlServerGenerator(),
                     new ch.lenglet.taql.ast.TaqlParser(), Resolver.Options.DEFAULTS,
-                    new NeverCaches<>(), new NeverCaches<>());
+                    new NeverCaches<>());
 
             String query = "list { TransactionId } over { TransactionValue > 500 } top 5";
             var first = uncached.compile(query);
@@ -626,7 +628,7 @@ class TaqlCompilerTest {
         void theDefaultCacheReportsWhatItDid() {
             compiler.compile("list { transactionId } over { clientId = '1' }");
             compiler.compile("list { transactionId } over { clientId = '1' }");
-            PlanCache.Stats stats = compiler.textCache().stats();
+            PlanCache.Stats stats = compiler.plans().stats();
             assertAll(
                     () -> assertEquals(1, stats.hits()),
                     () -> assertEquals(1, stats.misses()),

@@ -65,22 +65,11 @@ Two things a second backend needs that are deliberately **not** designed yet, be
 
 **Do not break this.** Any new node that could carry a user value must carry a slot index (`Resolved.LiteralRef`) or a variable name (`Resolved.Variable`), never the value.
 
-## The two caches, and the shape key
+## The plan cache, and the shape key
 
-| level | key | populated after | skips |
-|---|---|---|---|
-| L1 `textCache` | exact source text | — | everything, parsing included |
-| L2 `shapeCache` | `Ast.Query.shapeKey()` | parsing | resolution, typing, SQL generation |
+One cache, keyed on `Ast.Query.shapeKey()` — `AstPrinter.canonical(stmt)`, a value-independent rendering of the literal-free AST, computed **before** name resolution. It is reached after parsing, which is the cheap phase; everything expensive sits behind it.
 
-The shape key is `AstPrinter.canonical(stmt)` — a value-independent rendering of the literal-free AST, computed **before** name resolution.
-
-**Consequence for any change you make:** if a syntactic feature changes the generated SQL, `AstPrinter` must render it, or two queries needing different SQL will collide on one cached plan. Inline list *arity* is in the key for exactly this reason (`IN (?, ?)` vs `IN (?, ?, ?)`). `TaqlCompilerTest$Cache` and `theWindowSpecIsPartOfTheShapeKey` guard this — add a case there when you add syntax.
-
-**Second consequence, and the one that bites hardest:** `Plan.Auto` slots index the literal table of the query *currently running*, so two texts sharing a key must number their literals identically. Before this was fixed, `list {...} top 5 over { v > 500 }` silently executed as `TOP 500 ... > 5`.
-
-Two things now prevent it. **Clause order is fixed** — `from → over → sort by → top`, enforced in `AstBuilder.clauses()` rather than the grammar so the error names the clause and the shape instead of being an opaque parse failure; the order is analytical (`from`/`over` are one concern, the population; the rest acts on it). And `AstBuilder` still *builds* clauses in that canonical order rather than as-written, since building is what allocates slots — so relaxing the rule later cannot silently reintroduce the bug.
-
-Because that is an agreement between two files, the key renders the slot index too (`#0S`, not `#S`). If the walks ever drift, the keys differ and the queries compile separate plans — a redundant plan, never a query bound to another query's values. `clausesMustBeWrittenInTheCanonicalOrder` and `theCanonicalOrderNumbersLiteralsInTheOrderThePlanBindsThem` cover both halves: give a new clause a `rank()` and keep them passing.
+A cache on the source text used to sit in front. It is gone: a query states its own constants and those are what change between two calls, so it hit 0.03% of the time while holding hundreds of queries' worth of client data in memory. Keying only on the shape means nothing a caller asked about is retained between requests.
 
 The key is computed before resolution, which is also why `Catalog.Field` allows exactly **one spelling per field** (case-insensitive, no aliases): alternate names would compile separate plans for identical SQL.
 

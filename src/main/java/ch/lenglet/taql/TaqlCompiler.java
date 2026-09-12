@@ -17,27 +17,21 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The full pipeline, plus the two caches that keep it off the hot path.
+ * The full pipeline, plus the cache that keeps most of it off the hot path.
  *
- * <h2>Why two levels</h2>
+ * <h2>One cache, keyed on the query's shape</h2>
  * The obvious cache -- source text to plan -- only helps when clients send
- * byte-identical queries, which they will not: the values change on every call.
- * So:
+ * byte-identical queries, which they will not: a query states its own constants
+ * and those change on every call. Measured against inlined values it hit 0.03%
+ * of the time while holding hundreds of queries' worth of client data in memory,
+ * so it is not here.
  *
- * <ul>
- *   <li><b>L1, keyed on exact source text.</b> Holds the finished
- *       {@link Compiled} (plan + that text's literal values). A repeated
- *       identical request skips everything, parsing included.</li>
- *   <li><b>L2, keyed on the query's <em>shape</em>.</b> Reached after parsing,
- *       which is the cheap phase. Everything expensive -- resolution, type
- *       checking, lowering, SQL generation -- happens only on an L2 miss.
- *       Because {@link ch.lenglet.taql.ast.AstBuilder} lifts literals out of
- *       the tree, a thousand queries differing only in their constants share
- *       one L2 entry.</li>
- * </ul>
- *
- * Clients that use explicit {@code $variables} land in L1 every time, which is
- * the reason to prefer them; clients that inline constants still land in L2.
+ * What is cached is reached after parsing, which is the cheap phase, and keyed
+ * on {@link Ast.Query#shapeKey()} -- a rendering of the tree with the literals
+ * lifted out. Everything expensive is behind it: resolution, type checking,
+ * lowering, SQL generation. A thousand queries differing only in their constants
+ * share one entry, and because the key is value-free by construction, nothing a
+ * caller asked about is retained between requests.
  */
 public final class TaqlCompiler {
 
@@ -56,15 +50,14 @@ public final class TaqlCompiler {
     private final QueryTranslator translator;
     private final TaqlParser parser;
     private final Resolver.Options options;
-    private final PlanCache<String, Compiled> textCache;
-    private final PlanCache<String, Plan> shapeCache;
+    private final PlanCache<String, Plan> plans;
 
     public TaqlCompiler(Catalog catalog) {
-        this(catalog, new SqlServerGenerator(), Resolver.Options.DEFAULTS, 512, 512);
+        this(catalog, new SqlServerGenerator(), Resolver.Options.DEFAULTS, 512);
     }
 
-    public TaqlCompiler(Catalog catalog, Resolver.Options options, int textCacheSize, int shapeCacheSize) {
-        this(catalog, new SqlServerGenerator(), options, textCacheSize, shapeCacheSize);
+    public TaqlCompiler(Catalog catalog, Resolver.Options options, int cacheSize) {
+        this(catalog, new SqlServerGenerator(), options, cacheSize);
     }
 
     /**
@@ -72,10 +65,8 @@ public final class TaqlCompiler {
      *                   serves one translator: the shape key describes the query,
      *                   not the target, so two sharing a cache would collide.
      */
-    public TaqlCompiler(Catalog catalog, QueryTranslator translator, Resolver.Options options,
-                        int textCacheSize, int shapeCacheSize) {
-        this(catalog, translator, new TaqlParser(), options,
-                new LruPlanCache<>(textCacheSize), new LruPlanCache<>(shapeCacheSize));
+    public TaqlCompiler(Catalog catalog, QueryTranslator translator, Resolver.Options options, int cacheSize) {
+        this(catalog, translator, new TaqlParser(), options, new LruPlanCache<>(cacheSize));
     }
 
     /**
@@ -86,19 +77,17 @@ public final class TaqlCompiler {
      * @param parser     carries the parse limits -- query length and nesting
      *                   depth -- which are a deployment's call and were not
      *                   reachable while parsing was static.
-     * @param textCache  keyed on exact source, so it holds the literal values
-     *                   that came with the query. That is client data; see
-     *                   {@link TaqlQuery#toString()}.
-     * @param shapeCache keyed on the shape, which is value-free by construction.
+     * @param plans keyed on the query's shape, which is value-free by
+     *              construction -- so nothing a caller asked about is retained
+     *              between requests.
      */
-    public TaqlCompiler(Catalog catalog, QueryTranslator translator, TaqlParser parser, Resolver.Options options,
-                        PlanCache<String, Compiled> textCache, PlanCache<String, Plan> shapeCache) {
+    public TaqlCompiler(Catalog catalog, QueryTranslator translator, TaqlParser parser,
+                        Resolver.Options options, PlanCache<String, Plan> plans) {
         this.catalog = catalog;
         this.translator = translator;
         this.parser = parser;
         this.options = options;
-        this.textCache = textCache;
-        this.shapeCache = shapeCache;
+        this.plans = plans;
     }
 
     /** A plan together with the literal values of the specific query text it came from. */
@@ -124,18 +113,16 @@ public final class TaqlCompiler {
     }
 
     public Compiled compile(String source) {
-        return textCache.get(source, text -> {
-            Ast.Query parsed = parser.parse(text);
-            Plan plan = shapeCache.get(parsed.shapeKey(), shape -> {
-                Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, translator);
-                Plan generated = translator.translate(resolved.query(), shape);
-                log.debug("plan {} compiled, {} parameters\n{}",
-                        generated.id(), generated.parameters().size(), generated.statement().stripTrailing());
-                log.trace("plan {} has shape {}", generated.id(), shape);
-                return generated;
-            });
-            return new Compiled(plan, parsed);
+        Ast.Query parsed = parser.parse(source);
+        Plan plan = plans.get(parsed.shapeKey(), shape -> {
+            Resolver.Result resolved = Resolver.resolve(catalog, parsed, options, translator);
+            Plan generated = translator.translate(resolved.query(), shape);
+            log.debug("plan {} compiled, {} parameters\n{}",
+                    generated.id(), generated.parameters().size(), generated.statement().stripTrailing());
+            log.trace("plan {} has shape {}", generated.id(), shape);
+            return generated;
         });
+        return new Compiled(plan, parsed);
     }
 
     /** Parses and type-checks without consulting either cache -- for validation endpoints and tests. */
@@ -149,12 +136,8 @@ public final class TaqlCompiler {
         return Resolver.resolve(catalog, parser.parse(source), options, translator).query();
     }
 
-    public PlanCache<String, Compiled> textCache() {
-        return textCache;
-    }
-
-    public PlanCache<String, Plan> shapeCache() {
-        return shapeCache;
+    public PlanCache<String, Plan> plans() {
+        return plans;
     }
 
     public Catalog catalog() {

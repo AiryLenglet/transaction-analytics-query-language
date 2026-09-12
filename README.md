@@ -127,21 +127,22 @@ is a pure function of the entity, so aliases neither drift with which joins a
 query needs nor affect the plan cache. Fields pointing at a missing join fail in
 `Catalog.Entity`'s constructor, where the catalog is written.
 
-**Two caches, because one does not work.** Caching source text to plan only
-helps if clients send byte-identical queries, and they will not — the constants
-change every call.
-
-| level | key | populated after | skips |
-|---|---|---|---|
-| L1 | exact source text | — | everything, parsing included |
-| L2 | query *shape* | parsing (the cheap phase) | resolution, typing, SQL generation |
+**One cache, keyed on the query's shape.** Caching source text to plan only
+helps if clients send byte-identical queries, and they will not — a query states
+its own constants, and those are what change between two calls. Measured against
+inlined values that cache hit 0.03% of the time, so there is only one now: it is
+reached after parsing, which is the cheap phase, and it skips resolution, type
+checking and SQL generation.
 
 The shape key is the canonical rendering of the literal-free AST, so a thousand
-queries differing only in their constants share one L2 entry. Each `Plan` holds
-SQL plus a *recipe* for its parameters — `Auto(i)` reads `literals[i]` of the
-query being run, `Constant` is compiler-supplied — which is what lets one
-immutable plan serve them all. L1 only helps a query repeated verbatim; L2 is
-where the work is saved.
+queries differing only in their constants share one entry. Each `Plan` holds SQL
+plus a *recipe* for its parameters — `Auto(i)` reads `literals[i]` of the query
+being run, `Constant` is compiler-supplied — which is what lets one immutable
+plan serve them all.
+
+Keying on the shape and nothing else also means the cache holds no client data:
+a query's constants live with the request that sent them and are gone when it
+ends.
 
 **There are no placeholders.** A query states its own constants and nothing can
 be supplied alongside it, so one way to express a value and reading the text
